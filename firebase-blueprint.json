@@ -16,6 +16,7 @@
         "fileSize": { "type": "string", "minLength": 1, "maxLength": 40 },
         "downloadUrl": { "type": "string", "minLength": 1, "maxLength": 1000 },
         "thumbnailUrl": { "type": "string", "maxLength": 1000 },
+        "screenshots": { "type": "array" },
         "installGuide": { "type": "string", "maxLength": 4000 },
         "price": { "type": "number" },
         "downloadsCount": { "type": "integer" },

@@ -188,18 +188,20 @@ export function HomePage() {
         )}
 
         {loading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
             {[1, 2, 3].map((n) => (
               <div
                 key={n}
-                className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden animate-pulse"
+                className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 space-y-3 animate-pulse"
               >
-                <div className="aspect-[4/3] bg-slate-200 dark:bg-zinc-800" />
-                <div className="p-5 space-y-3">
-                  <div className="h-3 w-1/3 bg-slate-200 dark:bg-zinc-800 rounded" />
-                  <div className="h-5 w-2/3 bg-slate-200 dark:bg-zinc-800 rounded" />
-                  <div className="h-4 w-full bg-slate-200 dark:bg-zinc-800 rounded" />
+                <div className="flex items-center gap-3.5">
+                  <div className="w-12 h-12 rounded-xl bg-slate-200 dark:bg-zinc-800 shrink-0" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-4 w-3/4 bg-slate-200 dark:bg-zinc-800 rounded" />
+                    <div className="h-3 w-1/2 bg-slate-200 dark:bg-zinc-800 rounded" />
+                  </div>
                 </div>
+                <div className="h-3 w-full bg-slate-200 dark:bg-zinc-800 rounded" />
               </div>
             ))}
           </div>
@@ -228,7 +230,7 @@ export function HomePage() {
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
             {filteredItems.map((item) => (
               <SoftwareCard key={item.id} item={item} />
             ))}

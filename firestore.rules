@@ -48,8 +48,8 @@ service cloud.firestore {
       data.keys().hasOnly([
         'name', 'slug', 'tagline', 'description', 'category', 'platform',
         'fileType', 'version', 'fileSize', 'downloadUrl', 'thumbnailUrl',
-        'installGuide', 'price', 'downloadsCount', 'status', 'featured',
-        'createdAt', 'updatedAt'
+        'screenshots', 'installGuide', 'price', 'downloadsCount', 'status',
+        'featured', 'createdAt', 'updatedAt'
       ]) &&
       data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
       data.slug is string && data.slug.size() >= 1 && data.slug.size() <= 120 && data.slug.matches('^[a-zA-Z0-9_\\-]+$') &&
@@ -62,6 +62,7 @@ service cloud.firestore {
       data.fileSize is string && data.fileSize.size() >= 1 && data.fileSize.size() <= 40 &&
       data.downloadUrl is string && data.downloadUrl.size() >= 1 && data.downloadUrl.size() <= 1000 &&
       (!('thumbnailUrl' in data) || (data.thumbnailUrl is string && data.thumbnailUrl.size() <= 1000)) &&
+      (!('screenshots' in data) || (data.screenshots is list && data.screenshots.size() <= 10 && (data.screenshots.size() == 0 || data.screenshots[0] is string))) &&
       (!('installGuide' in data) || (data.installGuide is string && data.installGuide.size() <= 4000)) &&
       (data.price is int || data.price is float) && data.price >= 0 && data.price <= 100000 &&
       data.downloadsCount is int && data.downloadsCount >= 0 &&

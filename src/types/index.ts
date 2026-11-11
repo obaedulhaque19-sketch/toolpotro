@@ -20,6 +20,7 @@ export interface SoftwareItem {
   fileSize: string;
   downloadUrl: string;
   thumbnailUrl?: string;
+  screenshots?: string[];
   installGuide?: string;
   price: number;
   downloadsCount: number;
