@@ -1,0 +1,6 @@
+{
+  "name": "Toolpotro",
+  "description": "Ultra-secure Software, Android App, and Browser Extension distribution platform with dynamic coupon management and multi-language support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

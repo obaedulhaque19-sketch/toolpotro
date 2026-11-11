@@ -1,0 +1,23 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.email == 'obaedulhaque19@gmail.com';
+    }
+
+    // Public read for published software packages and thumbnails
+    match /software-assets/{allPaths=**} {
+      allow read: if true;
+      allow write: if isAdmin() && request.resource.size < 250 * 1024 * 1024;
+    }
+
+    // Default deny for all other paths
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

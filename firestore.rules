@@ -1,0 +1,183 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Global Hardened Helpers
+    // -------------------------------------------------------------------------
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'obaedulhaque19@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // -------------------------------------------------------------------------
+    // Validation Blueprints
+    // -------------------------------------------------------------------------
+    function isValidSoftware(data) {
+      return data.keys().hasAll([
+        'name', 'slug', 'tagline', 'description', 'category', 'platform',
+        'fileType', 'version', 'fileSize', 'downloadUrl', 'price',
+        'downloadsCount', 'status', 'featured', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'name', 'slug', 'tagline', 'description', 'category', 'platform',
+        'fileType', 'version', 'fileSize', 'downloadUrl', 'thumbnailUrl',
+        'installGuide', 'price', 'downloadsCount', 'status', 'featured',
+        'createdAt', 'updatedAt'
+      ]) &&
+      data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+      data.slug is string && data.slug.size() >= 1 && data.slug.size() <= 120 && data.slug.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.tagline is string && data.tagline.size() >= 1 && data.tagline.size() <= 200 &&
+      data.description is string && data.description.size() >= 1 && data.description.size() <= 4000 &&
+      data.category in ['desktop', 'android', 'extension', 'utility'] &&
+      data.platform in ['Windows', 'Android', 'Chrome', 'macOS', 'Cross-Platform'] &&
+      data.fileType in ['.exe', '.zip', '.apk', 'Store Link'] &&
+      data.version is string && data.version.size() >= 1 && data.version.size() <= 40 &&
+      data.fileSize is string && data.fileSize.size() >= 1 && data.fileSize.size() <= 40 &&
+      data.downloadUrl is string && data.downloadUrl.size() >= 1 && data.downloadUrl.size() <= 1000 &&
+      (!('thumbnailUrl' in data) || (data.thumbnailUrl is string && data.thumbnailUrl.size() <= 1000)) &&
+      (!('installGuide' in data) || (data.installGuide is string && data.installGuide.size() <= 4000)) &&
+      (data.price is int || data.price is float) && data.price >= 0 && data.price <= 100000 &&
+      data.downloadsCount is int && data.downloadsCount >= 0 &&
+      data.status in ['active', 'archived'] &&
+      data.featured is bool &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidCoupon(data) {
+      return data.keys().hasAll([
+        'code', 'discountType', 'discountValue', 'scope', 'targetSoftwareIds',
+        'expiryDate', 'usageLimit', 'usedCount', 'active', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'code', 'discountType', 'discountValue', 'scope', 'targetSoftwareIds',
+        'expiryDate', 'usageLimit', 'usedCount', 'active', 'createdAt', 'updatedAt'
+      ]) &&
+      data.code is string && data.code.size() >= 2 && data.code.size() <= 40 && data.code.matches('^[A-Z0-9_\\-]+$') &&
+      data.discountType in ['percentage', 'flat'] &&
+      (data.discountValue is int || data.discountValue is float) && data.discountValue > 0 &&
+      (data.discountType != 'percentage' || data.discountValue <= 100) &&
+      data.scope in ['all', 'specific'] &&
+      data.targetSoftwareIds is list && data.targetSoftwareIds.size() <= 50 &&
+      (data.targetSoftwareIds.size() == 0 || data.targetSoftwareIds[0] is string) &&
+      data.expiryDate is string && data.expiryDate.size() >= 8 && data.expiryDate.size() <= 30 &&
+      data.usageLimit is int && data.usageLimit >= 1 && data.usageLimit <= 1000000 &&
+      data.usedCount is int && data.usedCount >= 0 && data.usedCount <= data.usageLimit &&
+      data.active is bool &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidDownloadEvent(data) {
+      return data.keys().hasAll([
+        'softwareId', 'softwareName', 'platform', 'finalPrice', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'softwareId', 'softwareName', 'platform', 'couponCode', 'finalPrice', 'createdAt'
+      ]) &&
+      isValidId(data.softwareId) &&
+      data.softwareName is string && data.softwareName.size() >= 1 && data.softwareName.size() <= 120 &&
+      data.platform is string && data.platform.size() >= 1 && data.platform.size() <= 40 &&
+      (!('couponCode' in data) || (data.couponCode is string && data.couponCode.size() <= 40)) &&
+      (data.finalPrice is int || data.finalPrice is float) && data.finalPrice >= 0 &&
+      data.createdAt is timestamp;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection Rules
+    // -------------------------------------------------------------------------
+    match /software/{softwareId} {
+      allow get: if isValidId(softwareId) && (resource.data.status == 'active' || isAdmin());
+      allow list: if resource.data.status == 'active' || isAdmin();
+
+      allow create: if isAdmin() &&
+        isValidId(softwareId) &&
+        isValidSoftware(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isValidId(softwareId) &&
+        isValidSoftware(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (
+            existing().status == 'active' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['downloadsCount', 'updatedAt']) &&
+            incoming().downloadsCount == existing().downloadsCount + 1
+          )
+        );
+
+      allow delete: if isAdmin() && isValidId(softwareId);
+    }
+
+    match /coupons/{couponId} {
+      allow get: if isValidId(couponId) && (resource.data.active == true || isAdmin());
+      allow list: if resource.data.active == true || isAdmin();
+
+      allow create: if isAdmin() &&
+        isValidId(couponId) &&
+        isValidCoupon(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isValidId(couponId) &&
+        isValidCoupon(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (
+            existing().active == true &&
+            existing().usedCount < existing().usageLimit &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['usedCount', 'updatedAt']) &&
+            incoming().usedCount == existing().usedCount + 1
+          )
+        );
+
+      allow delete: if isAdmin() && isValidId(couponId);
+    }
+
+    match /downloadEvents/{eventId} {
+      allow get, list: if isAdmin();
+      allow create: if isValidId(eventId) &&
+        isValidDownloadEvent(incoming()) &&
+        incoming().createdAt == request.time &&
+        exists(/databases/$(database)/documents/software/$(incoming().softwareId));
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(eventId);
+    }
+
+    match /admins/{adminId} {
+      allow get: if isValidId(adminId) && (isAdmin() || (isVerifiedUser() && request.auth.uid == adminId));
+      allow list: if isAdmin();
+      allow create, update, delete: if isAdmin() && isValidId(adminId);
+    }
+  }
+}

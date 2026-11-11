@@ -1,0 +1,121 @@
+{
+  "entities": {
+    "SoftwareItem": {
+      "title": "SoftwareItem",
+      "description": "A distributable software package, Android APK, PC program, or browser extension.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "slug": { "type": "string", "minLength": 1, "maxLength": 120, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "tagline": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 4000 },
+        "category": { "type": "string", "enum": ["desktop", "android", "extension", "utility"] },
+        "platform": { "type": "string", "enum": ["Windows", "Android", "Chrome", "macOS", "Cross-Platform"] },
+        "fileType": { "type": "string", "enum": [".exe", ".zip", ".apk", "Store Link"] },
+        "version": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "fileSize": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "downloadUrl": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "thumbnailUrl": { "type": "string", "maxLength": 1000 },
+        "installGuide": { "type": "string", "maxLength": 4000 },
+        "price": { "type": "number" },
+        "downloadsCount": { "type": "integer" },
+        "status": { "type": "string", "enum": ["active", "archived"] },
+        "featured": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "name",
+        "slug",
+        "tagline",
+        "description",
+        "category",
+        "platform",
+        "fileType",
+        "version",
+        "fileSize",
+        "downloadUrl",
+        "price",
+        "downloadsCount",
+        "status",
+        "featured",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CouponCode": {
+      "title": "CouponCode",
+      "description": "Dynamic discount coupon applicable to all items or specific software.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "minLength": 2, "maxLength": 40, "pattern": "^[A-Z0-9_-]+$" },
+        "discountType": { "type": "string", "enum": ["percentage", "flat"] },
+        "discountValue": { "type": "number" },
+        "scope": { "type": "string", "enum": ["all", "specific"] },
+        "targetSoftwareIds": { "type": "array" },
+        "expiryDate": { "type": "string", "minLength": 8, "maxLength": 30 },
+        "usageLimit": { "type": "integer" },
+        "usedCount": { "type": "integer" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "code",
+        "discountType",
+        "discountValue",
+        "scope",
+        "targetSoftwareIds",
+        "expiryDate",
+        "usageLimit",
+        "usedCount",
+        "active",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "DownloadEvent": {
+      "title": "DownloadEvent",
+      "description": "Anonymous download analytics event for tracking software downloads.",
+      "type": "object",
+      "properties": {
+        "softwareId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "softwareName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "platform": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "couponCode": { "type": "string", "maxLength": 40 },
+        "finalPrice": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["softwareId", "softwareName", "platform", "finalPrice", "createdAt"]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Verified administrator record.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "role": { "type": "string", "enum": ["admin"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "role", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/software/{softwareId}": {
+      "schema": { "$ref": "#/entities/SoftwareItem" },
+      "description": "Publicly readable active software catalog; admin-only write."
+    },
+    "/coupons/{couponId}": {
+      "schema": { "$ref": "#/entities/CouponCode" },
+      "description": "Active coupons readable for checkout validation; admin-only write."
+    },
+    "/downloadEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/DownloadEvent" },
+      "description": "Download analytics events; public create, admin-only read/delete."
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Admin role registry."
+    }
+  }
+}
