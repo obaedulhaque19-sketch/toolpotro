@@ -235,15 +235,15 @@ export function HomePage() {
           {/* Unified Search + Browse Catalog CTA */}
           <form onSubmit={handleSearchSubmit} className="w-full max-w-2xl pt-0.5">
             <div
-              className={`w-full rounded-2xl border p-1 sm:p-1.5 flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shadow-xl ${
+              className={`w-full rounded-2xl border p-1 sm:p-1.5 flex flex-row items-center gap-1.5 sm:gap-2 shadow-xl ${
                 hasCustomBanner
                   ? 'border-white/15 bg-slate-900/75 backdrop-blur-md shadow-2xl'
                   : 'border-teal-900/15 bg-[#f2faf8] shadow-teal-950/10 dark:border-teal-500/20 dark:bg-[#081a1f] dark:shadow-black/40'
               }`}
             >
-              <div className="relative flex-1 flex items-center">
+              <div className="relative flex-1 min-w-0 flex items-center">
                 <Search
-                  className={`w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none ${
+                  className={`w-4 h-4 absolute left-3 sm:left-3.5 top-1/2 -translate-y-1/2 pointer-events-none ${
                     hasCustomBanner
                       ? 'text-slate-400'
                       : 'text-[#356368] dark:text-slate-400'
@@ -254,7 +254,7 @@ export function HomePage() {
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   placeholder={t.hero.searchPlaceholder}
-                  className={`w-full h-10 pl-10 pr-4 bg-transparent text-sm focus:outline-none ${
+                  className={`w-full h-10 pl-9 sm:pl-10 pr-2 sm:pr-4 bg-transparent text-sm focus:outline-none ${
                     hasCustomBanner
                       ? 'text-white placeholder:text-slate-400'
                       : 'text-[#062326] placeholder:text-[#4c767a] dark:text-white dark:placeholder:text-slate-400'
@@ -263,14 +263,15 @@ export function HomePage() {
               </div>
               <a
                 href="#catalog"
-                className={`h-10 px-5 rounded-xl text-sm font-bold inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0 ${
+                aria-label={t.hero.exploreCta}
+                className={`h-10 min-w-[44px] px-3.5 sm:px-5 rounded-xl text-sm font-bold inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0 ${
                   hasCustomBanner
                     ? 'bg-[#10d9a0] hover:bg-[#0ec28f] text-slate-950'
                     : 'bg-[#0d9488] hover:bg-[#0f766e] text-white dark:bg-[#10d9a0] dark:hover:bg-[#0ec28f] dark:text-slate-950'
                 }`}
               >
-                <span>{t.hero.exploreCta}</span>
-                <ArrowRight className="w-4 h-4" />
+                <span className="hidden sm:inline">{t.hero.exploreCta}</span>
+                <ArrowRight className="w-4 h-4 shrink-0" />
               </a>
             </div>
           </form>
