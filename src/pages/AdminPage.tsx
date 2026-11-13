@@ -997,18 +997,31 @@ export function AdminPage() {
             <label className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-zinc-400">
               Current Live Preview
             </label>
-            <div className="relative rounded-2xl overflow-hidden border border-slate-200 dark:border-zinc-800 bg-slate-900 aspect-16/9 max-w-2xl shadow-lg">
-              <img
-                src={heroBannerUrl || '/assets/hero_default.jpg'}
-                alt="Toolpotro hero preview"
-                className="w-full h-full object-cover"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).src = '/assets/hero_default.jpg';
-                }}
-              />
-              <div className="absolute top-3 right-3 px-2.5 py-1 rounded-full bg-black/70 backdrop-blur-xs text-[11px] font-mono font-medium text-white/90">
-                16:9 Aspect
-              </div>
+            <div className="relative rounded-2xl overflow-hidden border border-slate-200 dark:border-zinc-800 aspect-16/9 max-w-2xl shadow-lg">
+              {heroBannerUrl.trim() ? (
+                <>
+                  <img
+                    src={heroBannerUrl}
+                    alt="Toolpotro hero preview"
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute top-3 right-3 px-2.5 py-1 rounded-full bg-black/70 backdrop-blur-xs text-[11px] font-mono font-medium text-white/90">
+                    Custom Banner (16:9)
+                  </div>
+                </>
+              ) : (
+                <div className="w-full h-full toolpotro-pattern-dark flex flex-col items-center justify-center p-6 text-center">
+                  <span className="px-3 py-1 rounded-full border border-teal-400/35 bg-teal-950/70 text-xs font-medium text-teal-300 mb-2">
+                    Default Auto Mode
+                  </span>
+                  <p className="font-display text-base font-semibold text-white">
+                    Seamless Site Doodle Pattern Active
+                  </p>
+                  <p className="text-xs text-slate-300 mt-1 max-w-md">
+                    No custom banner image set. The homepage hero automatically matches the site&apos;s software &amp; extension pattern background.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 

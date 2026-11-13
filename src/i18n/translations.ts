@@ -14,6 +14,10 @@ export interface Translations {
     searchPlaceholder: string;
     exploreCta: string;
     verifiedNote: string;
+    popularPlatforms: string;
+    quickWindows: string;
+    quickAndroid: string;
+    quickExtensions: string;
   };
   filters: {
     all: string;
@@ -139,6 +143,10 @@ export const translations: Record<Language, Translations> = {
       searchPlaceholder: 'Search software, APKs, or extensions...',
       exploreCta: 'Browse Catalog',
       verifiedNote: 'Checksum-checked builds · Direct downloads',
+      popularPlatforms: 'Popular platforms:',
+      quickWindows: 'Windows (.exe / .msi)',
+      quickAndroid: 'Android (.apk)',
+      quickExtensions: 'Extensions (.crx / .xpi)',
     },
     filters: {
       all: 'All Platforms',
@@ -287,6 +295,10 @@ export const translations: Record<Language, Translations> = {
       searchPlaceholder: 'সফটওয়্যার, APK বা এক্সটেনশন খুঁজুন...',
       exploreCta: 'ক্যাটালগ দেখুন',
       verifiedNote: 'যাচাইকৃত বিল্ড · সরাসরি ডাউনলোড',
+      popularPlatforms: 'জনপ্রিয় প্ল্যাটফর্ম:',
+      quickWindows: 'উইন্ডোজ (.exe / .msi)',
+      quickAndroid: 'অ্যান্ড্রয়েড (.apk)',
+      quickExtensions: 'এক্সটেনশন (.crx / .xpi)',
     },
     filters: {
       all: 'সব প্ল্যাটফর্ম',
@@ -435,6 +447,10 @@ export const translations: Record<Language, Translations> = {
       searchPlaceholder: 'सॉफ़्टवेयर, APK या एक्सटेंशन खोजें...',
       exploreCta: 'कैटलॉग देखें',
       verifiedNote: 'सत्यापित बिल्ड · डायरेक्ट डाउनलोड',
+      popularPlatforms: 'लोकप्रिय प्लेटफ़ॉर्म:',
+      quickWindows: 'विंडोज़ (.exe / .msi)',
+      quickAndroid: 'एंड्रॉइड (.apk)',
+      quickExtensions: 'एक्सटेंशन (.crx / .xpi)',
     },
     filters: {
       all: 'सभी प्लेटफ़ॉर्म',

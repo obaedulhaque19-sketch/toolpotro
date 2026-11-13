@@ -287,11 +287,11 @@ export function SoftwareDetailPage() {
   if (loading) {
     return (
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-6 animate-pulse">
-        <div className="h-4 w-32 bg-slate-200 dark:bg-zinc-800 rounded" />
-        <div className="h-56 rounded-2xl bg-slate-200 dark:bg-zinc-800" />
+        <div className="h-4 w-32 bg-teal-900/15 dark:bg-teal-500/15 rounded" />
+        <div className="h-56 rounded-2xl bg-[#f2faf8]/80 dark:bg-[#081a1f]/90 border border-teal-900/15 dark:border-teal-500/20" />
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-8 h-72 rounded-2xl bg-slate-200 dark:bg-zinc-800" />
-          <div className="lg:col-span-4 h-72 rounded-2xl bg-slate-200 dark:bg-zinc-800" />
+          <div className="lg:col-span-8 h-72 rounded-2xl bg-[#f2faf8]/80 dark:bg-[#081a1f]/90 border border-teal-900/15 dark:border-teal-500/20" />
+          <div className="lg:col-span-4 h-72 rounded-2xl bg-[#f2faf8]/80 dark:bg-[#081a1f]/90 border border-teal-900/15 dark:border-teal-500/20" />
         </div>
       </main>
     );
@@ -300,15 +300,15 @@ export function SoftwareDetailPage() {
   if (notFound || !item) {
     return (
       <main className="max-w-3xl mx-auto px-4 sm:px-6 py-20 text-center space-y-4">
-        <h1 className="font-display text-2xl font-bold text-slate-900 dark:text-zinc-50">
+        <h1 className="font-display text-2xl font-bold text-[#062326] dark:text-white">
           {t.details.notFoundTitle}
         </h1>
-        <p className="text-sm text-slate-500 dark:text-zinc-400">
+        <p className="text-sm text-[#244e52] dark:text-teal-100/70">
           {t.details.notFoundSubtitle}
         </p>
         <Link
           to="/"
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 dark:bg-zinc-100 text-white dark:text-zinc-900 text-sm font-medium"
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[#07262a] text-[#2ee6b8] dark:bg-[#10d9a0] dark:text-slate-950 text-sm font-semibold"
         >
           <ArrowLeft className="w-4 h-4" />
           {t.details.backToCatalog}
@@ -325,17 +325,17 @@ export function SoftwareDetailPage() {
     <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-10 space-y-8">
       <Link
         to="/"
-        className="inline-flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-100 transition-colors"
+        className="inline-flex items-center gap-2 text-sm font-medium text-[#184549] hover:text-[#062326] dark:text-teal-200/80 dark:hover:text-[#2ee6b8] transition-colors"
       >
         <ArrowLeft className="w-4 h-4" />
         {t.details.backToCatalog}
       </Link>
 
       {/* Store-Style Hero Banner */}
-      <section className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-gradient-to-br from-white via-slate-50 to-teal-50/40 dark:from-zinc-900 dark:via-zinc-900 dark:to-zinc-950 p-6 sm:p-8 lg:p-10">
+      <section className="rounded-2xl border border-teal-900/15 dark:border-teal-500/20 bg-gradient-to-br from-[#f2faf8]/95 via-[#e2f3ef]/95 to-[#cfeae3]/95 dark:from-[#081d22]/95 dark:via-[#061519]/95 dark:to-[#040e11]/95 backdrop-blur-xs p-6 sm:p-8 lg:p-10 shadow-sm">
         <div className="flex flex-col md:flex-row items-center md:items-start gap-6 text-center md:text-left">
           {/* Compact App Icon */}
-          <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl bg-slate-100 dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 overflow-hidden shrink-0 flex items-center justify-center shadow-sm">
+          <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl bg-[#dff0ec] dark:bg-[#0d262d] border border-teal-900/15 dark:border-teal-500/20 overflow-hidden shrink-0 flex items-center justify-center shadow-sm">
             {item.thumbnailUrl && !iconError ? (
               <img
                 src={item.thumbnailUrl}
@@ -345,18 +345,18 @@ export function SoftwareDetailPage() {
                 className="w-full h-full object-cover"
               />
             ) : (
-              <Package className="w-10 h-10 text-slate-400 dark:text-zinc-500 stroke-[1.5]" />
+              <Package className="w-10 h-10 text-teal-700/70 dark:text-teal-300/70 stroke-[1.5]" />
             )}
           </div>
 
           {/* App Title, Meta, Tagline & Action Row */}
           <div className="flex-1 min-w-0 space-y-4">
             <div className="space-y-1.5">
-              <h1 className="font-display text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-slate-900 dark:text-zinc-50">
+              <h1 className="font-display text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-[#062326] dark:text-white">
                 {item.name}
               </h1>
 
-              <div className="flex flex-wrap items-center justify-center md:justify-start gap-2 text-xs font-mono text-slate-500 dark:text-zinc-400">
+              <div className="flex flex-wrap items-center justify-center md:justify-start gap-2 text-xs font-mono text-[#2c595d] dark:text-teal-200/70">
                 <span>{item.platform}</span>
                 <span aria-hidden="true">·</span>
                 <span>{item.fileType}</span>
@@ -371,7 +371,7 @@ export function SoftwareDetailPage() {
               </div>
             </div>
 
-            <p className="text-sm sm:text-base text-slate-600 dark:text-zinc-300 max-w-2xl leading-relaxed mx-auto md:mx-0">
+            <p className="text-sm sm:text-base text-[#1c4448] dark:text-slate-300 max-w-2xl leading-relaxed mx-auto md:mx-0">
               {item.tagline}
             </p>
 
@@ -381,7 +381,7 @@ export function SoftwareDetailPage() {
                 type="button"
                 onClick={handleDirectDownload}
                 disabled={downloading}
-                className="h-11 px-7 rounded-xl bg-teal-700 hover:bg-teal-800 dark:bg-sky-500 dark:hover:bg-sky-400 text-white dark:text-zinc-950 font-semibold text-sm inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer min-w-[200px]"
+                className="h-11 px-7 rounded-xl bg-[#0d9488] hover:bg-[#0f766e] text-white dark:bg-[#10d9a0] dark:hover:bg-[#0ec28f] dark:text-slate-950 font-bold text-sm inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer min-w-[200px]"
               >
                 <Download className="w-4 h-4" />
                 <span>
@@ -397,7 +397,7 @@ export function SoftwareDetailPage() {
                 type="button"
                 onClick={handleShare}
                 aria-label="Share"
-                className="h-11 px-3.5 rounded-xl border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-50 dark:hover:bg-zinc-700 transition-colors inline-flex items-center gap-1.5 text-xs font-medium cursor-pointer"
+                className="h-11 px-3.5 rounded-xl border border-teal-900/15 dark:border-teal-500/25 bg-[#f7fcfa] dark:bg-[#0b2329] text-[#062326] dark:text-teal-100 hover:bg-white dark:hover:bg-[#0f2e36] transition-colors inline-flex items-center gap-1.5 text-xs font-medium cursor-pointer"
               >
                 <Share2 className="w-4 h-4" />
                 {copiedShare && <span>Copied</span>}
@@ -406,7 +406,7 @@ export function SoftwareDetailPage() {
               <button
                 type="button"
                 onClick={() => setShowCouponBox((prev) => !prev)}
-                className="h-11 px-3.5 rounded-xl border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-50 dark:hover:bg-zinc-700 transition-colors inline-flex items-center gap-1.5 text-xs font-medium cursor-pointer"
+                className="h-11 px-3.5 rounded-xl border border-teal-900/15 dark:border-teal-500/25 bg-[#f7fcfa] dark:bg-[#0b2329] text-[#062326] dark:text-teal-100 hover:bg-white dark:hover:bg-[#0f2e36] transition-colors inline-flex items-center gap-1.5 text-xs font-medium cursor-pointer"
               >
                 <Tag className="w-3.5 h-3.5" />
                 <span>{t.details.applyCoupon}</span>
@@ -414,7 +414,7 @@ export function SoftwareDetailPage() {
             </div>
 
             {downloadSuccess && (
-              <div className="inline-flex items-center gap-2 text-xs text-teal-700 dark:text-teal-400 bg-teal-50 dark:bg-teal-950/30 px-3 py-2 rounded-lg">
+              <div className="inline-flex items-center gap-2 text-xs text-teal-800 dark:text-[#2ee6b8] bg-teal-500/15 dark:bg-[#10d9a0]/15 border border-teal-700/20 dark:border-[#10d9a0]/30 px-3 py-2 rounded-lg">
                 <CheckCircle2 className="w-4 h-4 shrink-0" />
                 <span>{t.details.downloadStarted}</span>
               </div>
@@ -424,8 +424,8 @@ export function SoftwareDetailPage() {
             {(showCouponBox || appliedCoupon) && (
               <div className="max-w-md mx-auto md:mx-0 pt-2">
                 {appliedCoupon ? (
-                  <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-800/60 text-xs">
-                    <span className="font-mono font-semibold text-teal-800 dark:text-teal-300">
+                  <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-teal-500/15 dark:bg-[#10d9a0]/15 border border-teal-700/25 dark:border-[#10d9a0]/30 text-xs">
+                    <span className="font-mono font-semibold text-[#062326] dark:text-[#2ee6b8]">
                       {appliedCoupon.code} — {t.details.couponApplied} (
                       {appliedCoupon.discountType === 'percentage'
                         ? `${appliedCoupon.discountValue}%`
@@ -438,7 +438,7 @@ export function SoftwareDetailPage() {
                         setAppliedCoupon(null);
                         setCouponInput('');
                       }}
-                      className="text-teal-700 dark:text-teal-300 hover:opacity-75 p-1"
+                      className="text-[#0d9488] dark:text-[#2ee6b8] hover:opacity-75 p-1 cursor-pointer"
                       aria-label={t.details.removeCoupon}
                     >
                       <X className="w-4 h-4" />
@@ -451,27 +451,27 @@ export function SoftwareDetailPage() {
                       value={couponInput}
                       onChange={(e) => setCouponInput(e.target.value.toUpperCase())}
                       placeholder={t.details.couponPlaceholder}
-                      className="flex-1 h-10 px-3 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 font-mono text-xs text-slate-900 dark:text-zinc-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-600"
+                      className="flex-1 h-10 px-3 rounded-xl border border-teal-900/20 dark:border-teal-500/25 bg-white/90 dark:bg-[#07181c] font-mono text-xs text-[#062326] dark:text-white placeholder:text-[#4e777b] dark:placeholder:text-teal-200/45 focus:outline-none focus:ring-2 focus:ring-teal-500"
                     />
                     <button
                       type="submit"
                       disabled={checkingCoupon || !couponInput.trim()}
-                      className="h-10 px-4 rounded-xl border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs font-semibold text-slate-900 dark:text-zinc-100 hover:bg-slate-50 dark:hover:bg-zinc-700 disabled:opacity-50 transition-colors shrink-0"
+                      className="h-10 px-4 rounded-xl border border-teal-900/20 dark:border-teal-500/25 bg-[#07262a] text-[#2ee6b8] dark:bg-[#10d9a0] dark:text-slate-950 text-xs font-semibold hover:opacity-90 disabled:opacity-50 transition-colors shrink-0 cursor-pointer"
                     >
                       {t.details.applyCoupon}
                     </button>
                   </form>
                 )}
                 {couponError && (
-                  <p className="text-xs text-red-600 dark:text-red-400 mt-1.5 text-left">
+                  <p className="text-xs text-red-700 dark:text-red-400 mt-1.5 text-left">
                     {couponError}
                   </p>
                 )}
               </div>
             )}
 
-            <p className="flex items-center justify-center md:justify-start gap-1.5 text-xs text-slate-500 dark:text-zinc-400">
-              <ShieldCheck className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400 shrink-0" />
+            <p className="flex items-center justify-center md:justify-start gap-1.5 text-xs text-[#2c595d] dark:text-teal-200/70">
+              <ShieldCheck className="w-3.5 h-3.5 text-[#0d9488] dark:text-[#2ee6b8] shrink-0" />
               <span>{t.details.zeroSpamNote}</span>
             </p>
           </div>
@@ -484,9 +484,9 @@ export function SoftwareDetailPage() {
         <div className="lg:col-span-8 space-y-6">
           {/* Screenshots Carousel Card */}
           {galleryImages.length > 0 && (
-            <section className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 sm:p-6 space-y-4">
+            <section className="rounded-2xl border border-teal-900/15 dark:border-teal-500/20 bg-[#f2faf8]/92 dark:bg-[#081a1f]/92 backdrop-blur-xs p-5 sm:p-6 space-y-4">
               <div className="flex items-center justify-between">
-                <h2 className="font-display text-base sm:text-lg font-bold text-slate-900 dark:text-zinc-50">
+                <h2 className="font-display text-base sm:text-lg font-bold text-[#062326] dark:text-white">
                   Screenshots
                 </h2>
                 {galleryImages.length > 1 && (
@@ -495,7 +495,7 @@ export function SoftwareDetailPage() {
                       type="button"
                       onClick={() => scrollGallery('left')}
                       aria-label="Scroll screenshots left"
-                      className="h-8 w-8 rounded-lg border border-slate-200 dark:border-zinc-800 flex items-center justify-center text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800"
+                      className="h-8 w-8 rounded-lg border border-teal-900/15 dark:border-teal-500/25 flex items-center justify-center text-[#184549] dark:text-teal-200 hover:bg-teal-900/5 dark:hover:bg-[#0d272e] cursor-pointer"
                     >
                       <ChevronLeft className="w-4 h-4" />
                     </button>
@@ -503,7 +503,7 @@ export function SoftwareDetailPage() {
                       type="button"
                       onClick={() => scrollGallery('right')}
                       aria-label="Scroll screenshots right"
-                      className="h-8 w-8 rounded-lg border border-slate-200 dark:border-zinc-800 flex items-center justify-center text-slate-600 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800"
+                      className="h-8 w-8 rounded-lg border border-teal-900/15 dark:border-teal-500/25 flex items-center justify-center text-[#184549] dark:text-teal-200 hover:bg-teal-900/5 dark:hover:bg-[#0d272e] cursor-pointer"
                     >
                       <ChevronRight className="w-4 h-4" />
                     </button>
@@ -520,7 +520,7 @@ export function SoftwareDetailPage() {
                     key={`${src}-${idx}`}
                     type="button"
                     onClick={() => setLightboxIndex(idx)}
-                    className="group relative shrink-0 w-[80%] sm:w-[320px] md:w-[360px] aspect-video rounded-xl overflow-hidden border border-slate-200 dark:border-zinc-800 bg-slate-100 dark:bg-zinc-950 snap-start cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
+                    className="group relative shrink-0 w-[80%] sm:w-[320px] md:w-[360px] aspect-video rounded-xl overflow-hidden border border-teal-900/15 dark:border-teal-500/20 bg-[#dff0ec] dark:bg-[#051114] snap-start cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500"
                   >
                     <img
                       src={src}
@@ -538,53 +538,53 @@ export function SoftwareDetailPage() {
           )}
 
           {/* Description & Technical Specs */}
-          <section className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 sm:p-6 space-y-6">
+          <section className="rounded-2xl border border-teal-900/15 dark:border-teal-500/20 bg-[#f2faf8]/92 dark:bg-[#081a1f]/92 backdrop-blur-xs p-5 sm:p-6 space-y-6">
             <div className="space-y-3">
-              <h2 className="font-display text-base sm:text-lg font-bold text-slate-900 dark:text-zinc-50">
+              <h2 className="font-display text-base sm:text-lg font-bold text-[#062326] dark:text-white">
                 Description
               </h2>
-              <p className="text-sm sm:text-[15px] text-slate-600 dark:text-zinc-300 leading-relaxed whitespace-pre-line">
+              <p className="text-sm sm:text-[15px] text-[#1e4347] dark:text-slate-300 leading-relaxed whitespace-pre-line">
                 {item.description}
               </p>
             </div>
 
-            <dl className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-5 border-t border-slate-100 dark:border-zinc-800 text-sm">
+            <dl className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-5 border-t border-teal-900/10 dark:border-teal-500/15 text-sm">
               <div className="space-y-1">
-                <dt className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-zinc-400">
+                <dt className="flex items-center gap-1.5 text-xs text-[#2c595d] dark:text-teal-200/70">
                   <HardDrive className="w-3.5 h-3.5" />
                   {t.details.fileSize}
                 </dt>
-                <dd className="font-mono font-medium text-slate-900 dark:text-zinc-100 tabular-nums">
+                <dd className="font-mono font-medium text-[#062326] dark:text-white tabular-nums">
                   {item.fileSize}
                 </dd>
               </div>
 
               <div className="space-y-1">
-                <dt className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-zinc-400">
+                <dt className="flex items-center gap-1.5 text-xs text-[#2c595d] dark:text-teal-200/70">
                   <Laptop className="w-3.5 h-3.5" />
                   {t.details.platform}
                 </dt>
-                <dd className="font-medium text-slate-900 dark:text-zinc-100">
+                <dd className="font-medium text-[#062326] dark:text-white">
                   {item.platform} ({item.fileType})
                 </dd>
               </div>
 
               <div className="space-y-1">
-                <dt className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-zinc-400">
+                <dt className="flex items-center gap-1.5 text-xs text-[#2c595d] dark:text-teal-200/70">
                   <Calendar className="w-3.5 h-3.5" />
                   {t.details.lastUpdated}
                 </dt>
-                <dd className="font-mono text-slate-900 dark:text-zinc-100 tabular-nums">
+                <dd className="font-mono text-[#062326] dark:text-white tabular-nums">
                   {formattedDate}
                 </dd>
               </div>
 
               <div className="space-y-1">
-                <dt className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-zinc-400">
+                <dt className="flex items-center gap-1.5 text-xs text-[#2c595d] dark:text-teal-200/70">
                   <Download className="w-3.5 h-3.5" />
                   {t.details.totalDownloads}
                 </dt>
-                <dd className="font-mono font-semibold text-slate-900 dark:text-zinc-100 tabular-nums">
+                <dd className="font-mono font-semibold text-[#062326] dark:text-white tabular-nums">
                   {item.downloadsCount.toLocaleString()}
                 </dd>
               </div>
@@ -592,17 +592,17 @@ export function SoftwareDetailPage() {
           </section>
 
           {/* Installation Guide */}
-          <section className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 sm:p-6 space-y-4">
-            <h2 className="font-display text-base sm:text-lg font-bold text-slate-900 dark:text-zinc-50">
+          <section className="rounded-2xl border border-teal-900/15 dark:border-teal-500/20 bg-[#f2faf8]/92 dark:bg-[#081a1f]/92 backdrop-blur-xs p-5 sm:p-6 space-y-4">
+            <h2 className="font-display text-base sm:text-lg font-bold text-[#062326] dark:text-white">
               {t.details.installGuideTitle}
             </h2>
             <ol className="space-y-3">
               {guideSteps.map((step, idx) => (
                 <li
                   key={idx}
-                  className="flex items-start gap-3 text-sm text-slate-700 dark:text-zinc-300 leading-relaxed"
+                  className="flex items-start gap-3 text-sm text-[#1e4347] dark:text-slate-300 leading-relaxed"
                 >
-                  <span className="font-mono text-xs font-semibold w-6 h-6 rounded-md bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 flex items-center justify-center shrink-0 mt-0.5 tabular-nums">
+                  <span className="font-mono text-xs font-semibold w-6 h-6 rounded-md bg-[#d6ede7] dark:bg-[#0f2c33] text-[#062326] dark:text-[#2ee6b8] flex items-center justify-center shrink-0 mt-0.5 tabular-nums">
                     {idx + 1}
                   </span>
                   <span>{step.replace(/^\d+\.\s*/, '')}</span>
@@ -613,32 +613,32 @@ export function SoftwareDetailPage() {
         </div>
 
         {/* Right Sidebar: Discover More */}
-        <aside className="lg:col-span-4 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 sm:p-6 space-y-4">
+        <aside className="lg:col-span-4 rounded-2xl border border-teal-900/15 dark:border-teal-500/20 bg-[#f2faf8]/92 dark:bg-[#081a1f]/92 backdrop-blur-xs p-5 sm:p-6 space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="font-display text-base font-bold text-slate-900 dark:text-zinc-50">
+            <h2 className="font-display text-base font-bold text-[#062326] dark:text-white">
               Discover more
             </h2>
             <Link
               to="/"
-              className="text-xs font-medium text-teal-700 dark:text-sky-400 hover:underline"
+              className="text-xs font-semibold text-[#0d9488] dark:text-[#2ee6b8] hover:underline"
             >
               {t.nav.catalog}
             </Link>
           </div>
 
           {relatedItems.length === 0 ? (
-            <p className="text-xs text-slate-500 dark:text-zinc-400">
+            <p className="text-xs text-[#2c595d] dark:text-teal-200/70">
               {t.catalog.emptyTitle}
             </p>
           ) : (
-            <div className="divide-y divide-slate-100 dark:divide-zinc-800">
+            <div className="divide-y divide-teal-900/10 dark:divide-teal-500/15">
               {relatedItems.map((rel) => (
                 <Link
                   key={rel.id}
                   to={`/software/${rel.id}`}
                   className="py-3 first:pt-1 last:pb-1 flex items-center gap-3 group"
                 >
-                  <div className="w-11 h-11 rounded-xl bg-slate-100 dark:bg-zinc-800 border border-slate-200/70 dark:border-zinc-700/70 overflow-hidden shrink-0 flex items-center justify-center">
+                  <div className="w-11 h-11 rounded-xl bg-[#dff0ec] dark:bg-[#0d262d] border border-teal-900/10 dark:border-teal-500/20 overflow-hidden shrink-0 flex items-center justify-center">
                     {rel.thumbnailUrl ? (
                       <img
                         src={rel.thumbnailUrl}
@@ -647,18 +647,18 @@ export function SoftwareDetailPage() {
                         className="w-full h-full object-cover"
                       />
                     ) : (
-                      <Package className="w-5 h-5 text-slate-400 dark:text-zinc-500" />
+                      <Package className="w-5 h-5 text-teal-700/70 dark:text-teal-300/70" />
                     )}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-slate-900 dark:text-zinc-100 truncate group-hover:text-teal-700 dark:group-hover:text-sky-400 transition-colors">
+                    <p className="text-sm font-semibold text-[#062326] dark:text-white truncate group-hover:text-[#0d9488] dark:group-hover:text-[#2ee6b8] transition-colors">
                       {rel.name}
                     </p>
-                    <p className="text-[11px] font-mono text-slate-500 dark:text-zinc-400 truncate">
+                    <p className="text-[11px] font-mono text-[#2c595d] dark:text-teal-200/70 truncate">
                       {rel.platform} · {rel.fileType}
                     </p>
                   </div>
-                  <span className="font-mono text-xs font-medium px-2 py-0.5 rounded-md bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 shrink-0 tabular-nums">
+                  <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded-md bg-[#d6ede7] dark:bg-[#10d9a0]/15 text-[#062326] dark:text-[#2ee6b8] shrink-0 tabular-nums">
                     {rel.price > 0 ? `$${rel.price}` : t.catalog.freeLabel}
                   </span>
                 </Link>
