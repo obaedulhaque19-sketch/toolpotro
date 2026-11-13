@@ -91,7 +91,15 @@ export interface Translations {
       software: string;
       coupons: string;
       analytics: string;
+      heroBanner: string;
     };
+    heroBannerTitle: string;
+    heroBannerSubtitle: string;
+    heroBannerSizeRecommendation: string;
+    uploadHeroImage: string;
+    saveHeroImage: string;
+    resetHeroImage: string;
+    heroImageUpdated: string;
     seedStarter: string;
     addSoftware: string;
     editSoftware: string;
@@ -232,7 +240,15 @@ export const translations: Record<Language, Translations> = {
         software: 'Software & Apps',
         coupons: 'Coupon Codes',
         analytics: 'Download Analytics',
+        heroBanner: 'Hero Banner',
       },
+      heroBannerTitle: 'Hero Showcase Image',
+      heroBannerSubtitle: 'Customize the main visual showcase displayed on the home page.',
+      heroBannerSizeRecommendation: 'Recommended size: 16:9 aspect ratio (e.g., 1200 × 675 px or 1600 × 900 px, max 5 MB). High-res landscape image.',
+      uploadHeroImage: 'Upload Hero Image',
+      saveHeroImage: 'Save Hero Image',
+      resetHeroImage: 'Reset to Default',
+      heroImageUpdated: 'Hero showcase image updated successfully!',
       seedStarter: 'Seed Starter Catalog',
       addSoftware: 'Add Software',
       editSoftware: 'Edit Software',
@@ -372,7 +388,15 @@ export const translations: Record<Language, Translations> = {
         software: 'সফটওয়্যার ও অ্যাপ',
         coupons: 'কুপন কোড',
         analytics: 'ডাউনলোড অ্যানালিটিক্স',
+        heroBanner: 'হিরো ব্যানার',
       },
+      heroBannerTitle: 'হোমপেজ হিরো ব্যানার ইমেজ',
+      heroBannerSubtitle: 'হোমপেজের মূল হিরো সেকশনে প্রদর্শিত ব্যানার ইমেজ পরিবর্তন করুন।',
+      heroBannerSizeRecommendation: 'সুপারিশকৃত সাইজ: 16:9 অনুপাত (যেমন: 1200 × 675 px বা 1600 × 900 px, সর্বোচ্চ 5 MB)। স্পষ্ট ল্যান্ডস্কেপ ইমেজ।',
+      uploadHeroImage: 'হিরো ইমেজ আপলোড করুন',
+      saveHeroImage: 'হিরো ইমেজ সংরক্ষণ করুন',
+      resetHeroImage: 'ডিফল্টে ফিরে যান',
+      heroImageUpdated: 'হিরো ইমেজ সফলভাবে আপডেট হয়েছে!',
       seedStarter: 'নমুনা ডেটা যুক্ত করুন',
       addSoftware: 'নতুন সফটওয়্যার',
       editSoftware: 'সফটওয়্যার এডিট',
@@ -512,7 +536,15 @@ export const translations: Record<Language, Translations> = {
         software: 'सॉफ़्टवेयर और ऐप्स',
         coupons: 'कूपन कोड',
         analytics: 'डाउनलोड एनालिटिक्स',
+        heroBanner: 'हीरो बैनर',
       },
+      heroBannerTitle: 'होमपेज हीरो बैनर इमेज',
+      heroBannerSubtitle: 'होमपेज के मुख्य हीरो सेक्शन में दिखने वाली बैनर इमेज बदलें।',
+      heroBannerSizeRecommendation: 'अनुशंसित आकार: 16:9 अनुपात (उदा. 1200 × 675 px या 1600 × 900 px, अधिकतम 5 MB)। स्पष्ट लैंडस्केप इमेज।',
+      uploadHeroImage: 'हीरो इमेज अपलोड करें',
+      saveHeroImage: 'हीरो इमेज सहेजें',
+      resetHeroImage: 'डिफ़ॉल्ट पर रीसेट करें',
+      heroImageUpdated: 'हीरो इमेज सफलतापूर्वक अपडेट हो गई!',
       seedStarter: 'स्टार्टर कैटलॉग जोड़ें',
       addSoftware: 'सॉफ़्टवेयर जोड़ें',
       editSoftware: 'सॉफ़्टवेयर संपादित करें',

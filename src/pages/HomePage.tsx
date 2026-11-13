@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
 import { Search, ShieldCheck, PackageOpen } from 'lucide-react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useApp } from '../context/AppContext';
@@ -26,6 +26,25 @@ export function HomePage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedPlatform, setSelectedPlatform] = useState<'All' | SoftwarePlatform>(initialPlatform);
+
+  const [heroImage, setHeroImage] = useState<string>('/assets/hero_default.jpg');
+  const [heroImgError, setHeroImgError] = useState(false);
+
+  useEffect(() => {
+    const unsubHero = onSnapshot(
+      doc(db, 'settings', 'hero'),
+      (snap) => {
+        if (snap.exists() && snap.data().heroImageUrl) {
+          setHeroImage(snap.data().heroImageUrl);
+          setHeroImgError(false);
+        }
+      },
+      () => {
+        // Fallback to default bundled asset
+      }
+    );
+    return () => unsubHero();
+  }, []);
 
   useEffect(() => {
     const paramPlatform = searchParams.get('platform') as SoftwarePlatform | null;
@@ -144,13 +163,31 @@ export function HomePage() {
 
         {/* Hero Visual */}
         <div className="lg:col-span-5">
-          <div className="h-full min-h-[240px] rounded-2xl overflow-hidden border border-slate-200 dark:border-zinc-800 bg-slate-100 dark:bg-zinc-900">
-            <img
-              src="/src/assets/images/hero_toolpotro_showcase_1794404735444.jpg"
-              alt="Toolpotro verified software distribution"
-              referrerPolicy="no-referrer"
-              className="w-full h-full object-cover"
-            />
+          <div className="h-full min-h-[240px] rounded-2xl overflow-hidden border border-slate-200 dark:border-zinc-800 bg-slate-100 dark:bg-zinc-900 flex items-center justify-center">
+            {!heroImgError && heroImage ? (
+              <img
+                src={heroImage}
+                alt="Toolpotro verified software distribution"
+                referrerPolicy="no-referrer"
+                onError={() => setHeroImgError(true)}
+                className="w-full h-full object-cover transition-opacity duration-300"
+              />
+            ) : (
+              <div className="w-full h-full min-h-[260px] flex flex-col items-center justify-center p-6 text-center bg-gradient-to-br from-slate-100 to-teal-50/50 dark:from-zinc-900 dark:to-zinc-950">
+                <img
+                  src="/assets/aistudio/image_2e281797.png"
+                  alt="Toolpotro"
+                  className="h-14 w-auto object-contain mb-3 opacity-90"
+                  referrerPolicy="no-referrer"
+                />
+                <span className="font-display font-semibold text-sm text-slate-700 dark:text-zinc-300">
+                  Toolpotro Verified Ecosystem
+                </span>
+                <span className="text-xs font-mono text-slate-500 dark:text-zinc-500 mt-1">
+                  Desktop · Android · Chrome
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </section>

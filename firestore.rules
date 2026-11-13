@@ -111,6 +111,12 @@ service cloud.firestore {
       data.createdAt is timestamp;
     }
 
+    function isValidSettings(data) {
+      return data.keys().hasOnly(['heroImageUrl', 'updatedAt']) &&
+        (!('heroImageUrl' in data) || (data.heroImageUrl is string && data.heroImageUrl.size() <= 1000)) &&
+        (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
     // -------------------------------------------------------------------------
     // Collection Rules
     // -------------------------------------------------------------------------
@@ -179,6 +185,15 @@ service cloud.firestore {
       allow get: if isValidId(adminId) && (isAdmin() || (isVerifiedUser() && request.auth.uid == adminId));
       allow list: if isAdmin();
       allow create, update, delete: if isAdmin() && isValidId(adminId);
+    }
+
+    match /settings/{settingId} {
+      allow get, list: if isValidId(settingId);
+      allow create, update: if isAdmin() &&
+        isValidId(settingId) &&
+        isValidSettings(incoming()) &&
+        (!('updatedAt' in incoming()) || incoming().updatedAt == request.time);
+      allow delete: if isAdmin() && isValidId(settingId);
     }
   }
 }

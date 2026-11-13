@@ -13,6 +13,7 @@ import {
 import {
   Archive,
   BarChart3,
+  Check,
   Download,
   Edit3,
   LogOut,
@@ -42,7 +43,7 @@ import type {
   SoftwarePlatform,
 } from '../types';
 
-type AdminTab = 'software' | 'coupons' | 'analytics';
+type AdminTab = 'software' | 'coupons' | 'analytics' | 'heroBanner';
 
 const EMPTY_SOFTWARE_FORM = {
   id: '',
@@ -104,6 +105,14 @@ export function AdminPage() {
   const [screenshotsUploading, setScreenshotsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [githubConfigured, setGithubConfigured] = useState<boolean | null>(null);
+
+  // Hero Banner State
+  const [heroBannerUrl, setHeroBannerUrl] = useState<string>('');
+  const [heroBannerUploading, setHeroBannerUploading] = useState(false);
+  const [heroBannerUploadProgress, setHeroBannerUploadProgress] = useState<number | null>(null);
+  const [heroBannerSaving, setHeroBannerSaving] = useState(false);
+  const [heroBannerSuccess, setHeroBannerSuccess] = useState(false);
+  const [heroBannerError, setHeroBannerError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch('/api/github/status')
@@ -262,10 +271,23 @@ export function AdminPage() {
       (err) => handleFirestoreError(err, OperationType.LIST, 'downloadEvents')
     );
 
+    const unsubHero = onSnapshot(
+      doc(db, 'settings', 'hero'),
+      (snap) => {
+        if (snap.exists() && snap.data()?.heroImageUrl) {
+          setHeroBannerUrl(snap.data().heroImageUrl);
+        } else {
+          setHeroBannerUrl('');
+        }
+      },
+      (err) => handleFirestoreError(err, OperationType.GET, 'settings/hero')
+    );
+
     return () => {
       unsubSoftware();
       unsubCoupons();
       unsubEvents();
+      unsubHero();
     };
   }, [isAdmin]);
 
@@ -478,6 +500,70 @@ export function AdminPage() {
     }
   };
 
+  const handleHeroBannerUpload = async (file: File) => {
+    setHeroBannerError(null);
+    setHeroBannerSuccess(false);
+    setHeroBannerUploading(true);
+    setHeroBannerUploadProgress(0);
+    try {
+      const url = await uploadToGitHubReleases(file, setHeroBannerUploadProgress);
+      setHeroBannerUrl(url);
+    } catch (err) {
+      setHeroBannerError(err instanceof Error ? err.message : 'Hero banner upload failed');
+    } finally {
+      setHeroBannerUploading(false);
+      setHeroBannerUploadProgress(null);
+    }
+  };
+
+  const handleSaveHeroBanner = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setHeroBannerSaving(true);
+    setHeroBannerError(null);
+    setHeroBannerSuccess(false);
+    try {
+      await setDoc(
+        doc(db, 'settings', 'hero'),
+        {
+          heroImageUrl: heroBannerUrl.trim(),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      setHeroBannerSuccess(true);
+      setTimeout(() => setHeroBannerSuccess(false), 4000);
+    } catch (err) {
+      setHeroBannerError(err instanceof Error ? err.message : 'Failed to save hero banner');
+      handleFirestoreError(err, OperationType.WRITE, 'settings/hero');
+    } finally {
+      setHeroBannerSaving(false);
+    }
+  };
+
+  const handleResetHeroBanner = async () => {
+    setHeroBannerSaving(true);
+    setHeroBannerError(null);
+    setHeroBannerSuccess(false);
+    try {
+      await setDoc(
+        doc(db, 'settings', 'hero'),
+        {
+          heroImageUrl: '',
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      setHeroBannerUrl('');
+      setHeroBannerSuccess(true);
+      setTimeout(() => setHeroBannerSuccess(false), 4000);
+    } catch (err) {
+      setHeroBannerError(err instanceof Error ? err.message : 'Failed to reset hero banner');
+      handleFirestoreError(err, OperationType.WRITE, 'settings/hero');
+    } finally {
+      setHeroBannerSaving(false);
+    }
+  };
+
   if (authLoading) {
     return (
       <main className="max-w-md mx-auto px-4 py-24 text-center">
@@ -660,7 +746,7 @@ export function AdminPage() {
       {/* Workspace Tabs */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-zinc-900 rounded-xl border border-slate-200/70 dark:border-zinc-800">
-          {(['software', 'coupons', 'analytics'] as AdminTab[]).map((tab) => (
+          {(['software', 'coupons', 'analytics', 'heroBanner'] as AdminTab[]).map((tab) => (
             <button
               key={tab}
               type="button"
@@ -873,6 +959,115 @@ export function AdminPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Tab 4: Hero Banner Management */}
+      {activeTab === 'heroBanner' && (
+        <div className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 sm:p-8 space-y-6">
+          <div>
+            <h2 className="font-display text-xl font-bold text-slate-900 dark:text-zinc-50 flex items-center gap-2">
+              <ImageIcon className="w-5 h-5 text-teal-700 dark:text-teal-400" />
+              {t.admin.heroBannerTitle}
+            </h2>
+            <p className="text-sm text-slate-500 dark:text-zinc-400 mt-1">
+              {t.admin.heroBannerSubtitle}
+            </p>
+            <p className="text-xs text-teal-700 dark:text-teal-400 font-medium mt-1.5 flex items-center gap-1.5">
+              <span className="inline-block w-2 h-2 rounded-full bg-teal-500" />
+              {t.admin.heroBannerSizeRecommendation}
+            </p>
+          </div>
+
+          {heroBannerError && (
+            <div className="rounded-xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/30 p-3 text-xs text-red-700 dark:text-red-300">
+              {heroBannerError}
+            </div>
+          )}
+
+          {heroBannerSuccess && (
+            <div className="rounded-xl border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50 dark:bg-emerald-950/30 p-3 text-xs text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
+              <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+              {t.admin.heroImageUpdated}
+            </div>
+          )}
+
+          {/* Live Preview Card */}
+          <div className="space-y-2">
+            <label className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-zinc-400">
+              Current Live Preview
+            </label>
+            <div className="relative rounded-2xl overflow-hidden border border-slate-200 dark:border-zinc-800 bg-slate-900 aspect-16/9 max-w-2xl shadow-lg">
+              <img
+                src={heroBannerUrl || '/assets/hero_default.jpg'}
+                alt="Toolpotro hero preview"
+                className="w-full h-full object-cover"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = '/assets/hero_default.jpg';
+                }}
+              />
+              <div className="absolute top-3 right-3 px-2.5 py-1 rounded-full bg-black/70 backdrop-blur-xs text-[11px] font-mono font-medium text-white/90">
+                16:9 Aspect
+              </div>
+            </div>
+          </div>
+
+          {/* Form Controls */}
+          <form onSubmit={handleSaveHeroBanner} className="space-y-4 max-w-2xl">
+            <div>
+              <label className="text-xs font-medium text-slate-700 dark:text-zinc-300 block mb-1">
+                Image URL or Uploaded Link
+              </label>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="url"
+                  value={heroBannerUrl}
+                  onChange={(e) => setHeroBannerUrl(e.target.value)}
+                  placeholder="https://... or upload below"
+                  className="flex-1 h-10 px-3 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 text-sm font-mono text-slate-900 dark:text-zinc-100"
+                />
+                <label className="h-10 px-4 rounded-xl border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs font-semibold text-slate-800 dark:text-zinc-100 inline-flex items-center justify-center gap-2 hover:bg-slate-50 dark:hover:bg-zinc-700 transition-colors cursor-pointer shrink-0">
+                  <Upload className="w-4 h-4" />
+                  {heroBannerUploading
+                    ? `Uploading ${heroBannerUploadProgress ?? 0}%`
+                    : t.admin.uploadHeroImage}
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    disabled={heroBannerUploading}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleHeroBannerUpload(file);
+                    }}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1">
+                Supported formats: JPG, PNG, WebP. Recommended: 1200 × 675 px (16:9).
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 pt-2">
+              <button
+                type="submit"
+                disabled={heroBannerSaving || heroBannerUploading}
+                className="h-10 px-5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-semibold inline-flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {heroBannerSaving ? 'Saving...' : t.admin.saveHeroImage}
+              </button>
+
+              <button
+                type="button"
+                disabled={heroBannerSaving || heroBannerUploading}
+                onClick={handleResetHeroBanner}
+                className="h-10 px-4 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs font-semibold text-slate-700 dark:text-zinc-300 inline-flex items-center gap-2 hover:bg-slate-50 dark:hover:bg-zinc-800 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                {t.admin.resetHeroImage}
+              </button>
+            </div>
+          </form>
         </div>
       )}
 
