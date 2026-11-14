@@ -11,12 +11,17 @@ import {
   updateDoc,
 } from 'firebase/firestore';
 import {
+  AlertCircle,
   Archive,
   BarChart3,
   Check,
+  CheckCircle2,
   Download,
   Edit3,
+  ExternalLink,
+  Globe,
   LogOut,
+  Mail,
   Package,
   Plus,
   RotateCcw,
@@ -43,7 +48,10 @@ import type {
   SoftwarePlatform,
 } from '../types';
 
-type AdminTab = 'software' | 'coupons' | 'analytics' | 'heroBanner';
+type AdminTab = 'software' | 'coupons' | 'analytics' | 'heroBanner' | 'seoSettings';
+
+const DEFAULT_CONTACT_EMAIL = 'obaedulhaque19@gmail.com';
+const DEFAULT_FACEBOOK_URL = 'https://www.facebook.com/toolpotro';
 
 const EMPTY_SOFTWARE_FORM = {
   id: '',
@@ -113,6 +121,14 @@ export function AdminPage() {
   const [heroBannerSaving, setHeroBannerSaving] = useState(false);
   const [heroBannerSuccess, setHeroBannerSuccess] = useState(false);
   const [heroBannerError, setHeroBannerError] = useState<string | null>(null);
+
+  // SEO, Contact & Redirect Settings State
+  const [contactEmail, setContactEmail] = useState<string>(DEFAULT_CONTACT_EMAIL);
+  const [facebookUrl, setFacebookUrl] = useState<string>(DEFAULT_FACEBOOK_URL);
+  const [contactSaving, setContactSaving] = useState(false);
+  const [contactSuccess, setContactSuccess] = useState(false);
+  const [contactError, setContactError] = useState<string | null>(null);
+  const [slugRedirects, setSlugRedirects] = useState<Record<string, string>>({});
 
   useEffect(() => {
     fetch('/api/github/status')
@@ -283,11 +299,45 @@ export function AdminPage() {
       (err) => handleFirestoreError(err, OperationType.GET, 'settings/hero')
     );
 
+    const unsubContact = onSnapshot(
+      doc(db, 'settings', 'contact'),
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          setContactEmail(
+            typeof data?.contactEmail === 'string' && data.contactEmail.trim()
+              ? data.contactEmail
+              : DEFAULT_CONTACT_EMAIL
+          );
+          setFacebookUrl(
+            typeof data?.facebookUrl === 'string' && data.facebookUrl.trim()
+              ? data.facebookUrl
+              : DEFAULT_FACEBOOK_URL
+          );
+        }
+      },
+      () => {}
+    );
+
+    const unsubRedirects = onSnapshot(
+      doc(db, 'settings', 'redirects'),
+      (snap) => {
+        if (snap.exists() && snap.data()?.redirects && typeof snap.data().redirects === 'object') {
+          setSlugRedirects(snap.data().redirects as Record<string, string>);
+        } else {
+          setSlugRedirects({});
+        }
+      },
+      () => {}
+    );
+
     return () => {
       unsubSoftware();
       unsubCoupons();
       unsubEvents();
       unsubHero();
+      unsubContact();
+      unsubRedirects();
     };
   }, [isAdmin]);
 
@@ -332,12 +382,14 @@ export function AdminPage() {
   };
 
   const openAddSoftware = () => {
+    setUploadError(null);
     setEditingId(null);
     setSoftwareForm(EMPTY_SOFTWARE_FORM);
     setShowSoftwareModal(true);
   };
 
   const openEditSoftware = (item: SoftwareItem) => {
+    setUploadError(null);
     setEditingId(item.id);
     setSoftwareForm({
       id: item.id,
@@ -360,16 +412,102 @@ export function AdminPage() {
     setShowSoftwareModal(true);
   };
 
+  const cleanSlugPreview = useMemo(() => {
+    return (
+      softwareForm.slug
+        .trim()
+        .replace(/[^a-zA-Z0-9_-]/g, '-')
+        .toLowerCase()
+        .replace(/^-+|-+$/g, '') ||
+      softwareForm.name
+        .trim()
+        .replace(/[^a-zA-Z0-9_-]/g, '-')
+        .toLowerCase()
+        .replace(/^-+|-+$/g, '')
+    );
+  }, [softwareForm.slug, softwareForm.name]);
+
+  const seoAudit = useMemo(() => {
+    const name = softwareForm.name.trim();
+    const slug = cleanSlugPreview;
+    const tagline = softwareForm.tagline.trim();
+    const desc = softwareForm.description.trim();
+    const titlePreview = name ? `${name} (${softwareForm.version.trim() || 'v1.0'}) — Toolpotro` : 'Toolpotro Software';
+    const keywords = name
+      .toLowerCase()
+      .split(/[\s_-]+/)
+      .filter((w) => w.length >= 3);
+
+    const checks = [
+      {
+        label: `SEO Title length (${titlePreview.length} chars, ideal 30–65)`,
+        ok: titlePreview.length >= 25 && titlePreview.length <= 70 && name.length >= 3,
+        points: 15,
+      },
+      {
+        label: 'Clean keyword-friendly URL Slug (3–60 chars)',
+        ok: slug.length >= 3 && slug.length <= 60 && /^[a-z0-9][a-z0-9_-]*$/.test(slug),
+        points: 15,
+      },
+      {
+        label: `Tagline / Meta Description (${tagline.length} chars, ideal 45–160)`,
+        ok: tagline.length >= 45 && tagline.length <= 165,
+        points: 20,
+      },
+      {
+        label: `Full Description depth (${desc.length} chars, recommended 120+)`,
+        ok: desc.length >= 120,
+        points: 20,
+      },
+      {
+        label: 'Main keyword present in Slug, Tagline, or Description',
+        ok:
+          keywords.length > 0 &&
+          keywords.some(
+            (kw) =>
+              slug.includes(kw) ||
+              tagline.toLowerCase().includes(kw) ||
+              desc.toLowerCase().includes(kw)
+          ),
+        points: 15,
+      },
+      {
+        label: 'Custom App Logo & Screenshots uploaded',
+        ok:
+          Boolean(softwareForm.thumbnailUrl.trim()) &&
+          !softwareForm.thumbnailUrl.includes('app_preview_desktop_1794404736026.jpg'),
+        points: 15,
+      },
+    ];
+
+    const score = checks.reduce((sum, c) => sum + (c.ok ? c.points : 0), 0);
+    return { score, titlePreview, checks };
+  }, [softwareForm, cleanSlugPreview]);
+
   const handleSaveSoftware = async (e: React.FormEvent) => {
     e.preventDefault();
+    setUploadError(null);
+    const cleanSlug = cleanSlugPreview;
+    if (!cleanSlug) {
+      setUploadError('Please enter a valid Name or Slug (letters, numbers, hyphens).');
+      return;
+    }
+
+    if (editingId && cleanSlug !== editingId && softwareList.some((s) => s.id === cleanSlug)) {
+      setUploadError(`Slug "${cleanSlug}" is already used by another software item.`);
+      return;
+    }
+
+    if (!editingId && softwareList.some((s) => s.id === cleanSlug)) {
+      setUploadError(`Slug "${cleanSlug}" already exists. Please use a unique Slug (ID).`);
+      return;
+    }
+
     setSavingSoftware(true);
-    const cleanSlug =
-      softwareForm.slug.trim().replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase() ||
-      softwareForm.name.trim().replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase();
-    const docId = editingId || cleanSlug;
+    const docId = cleanSlug;
 
     try {
-      if (editingId) {
+      if (editingId && cleanSlug === editingId) {
         await updateDoc(doc(db, 'software', docId), {
           name: softwareForm.name.trim(),
           slug: cleanSlug,
@@ -388,6 +526,61 @@ export function AdminPage() {
           featured: Boolean(softwareForm.featured),
           updatedAt: serverTimestamp(),
         });
+      } else if (editingId && cleanSlug !== editingId) {
+        const existingItem = softwareList.find((s) => s.id === editingId);
+        await setDoc(doc(db, 'software', cleanSlug), {
+          name: softwareForm.name.trim(),
+          slug: cleanSlug,
+          tagline: softwareForm.tagline.trim(),
+          description: softwareForm.description.trim(),
+          category: softwareForm.category,
+          platform: softwareForm.platform,
+          fileType: softwareForm.fileType,
+          version: softwareForm.version.trim(),
+          fileSize: softwareForm.fileSize.trim(),
+          downloadUrl: softwareForm.downloadUrl.trim(),
+          thumbnailUrl: softwareForm.thumbnailUrl.trim(),
+          screenshots: softwareForm.screenshots,
+          installGuide: softwareForm.installGuide.trim(),
+          price: Number(softwareForm.price) || 0,
+          downloadsCount: existingItem?.downloadsCount ?? 0,
+          status: existingItem?.status ?? 'active',
+          featured: Boolean(softwareForm.featured),
+          createdAt: existingItem?.createdAt || serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+
+        // Preserve old links via 301 redirect map without deleting shared GitHub Release files
+        const nextRedirects: Record<string, string> = {};
+        for (const [oldKey, targetVal] of Object.entries(slugRedirects)) {
+          nextRedirects[oldKey] = targetVal === editingId ? cleanSlug : targetVal;
+        }
+        nextRedirects[editingId] = cleanSlug;
+        delete nextRedirects[cleanSlug];
+
+        await setDoc(
+          doc(db, 'settings', 'redirects'),
+          {
+            redirects: nextRedirects,
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        // Update any coupons targeting the old software ID
+        for (const coupon of coupons) {
+          if (coupon.targetSoftwareIds?.includes(editingId)) {
+            const nextTargets = coupon.targetSoftwareIds.map((tid) =>
+              tid === editingId ? cleanSlug : tid
+            );
+            await updateDoc(doc(db, 'coupons', coupon.id), {
+              targetSoftwareIds: Array.from(new Set(nextTargets)),
+              updatedAt: serverTimestamp(),
+            });
+          }
+        }
+
+        await deleteDoc(doc(db, 'software', editingId));
       } else {
         await setDoc(doc(db, 'software', docId), {
           name: softwareForm.name.trim(),
@@ -561,6 +754,31 @@ export function AdminPage() {
       handleFirestoreError(err, OperationType.WRITE, 'settings/hero');
     } finally {
       setHeroBannerSaving(false);
+    }
+  };
+
+  const handleSaveContactSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setContactSaving(true);
+    setContactError(null);
+    setContactSuccess(false);
+    try {
+      await setDoc(
+        doc(db, 'settings', 'contact'),
+        {
+          contactEmail: contactEmail.trim(),
+          facebookUrl: facebookUrl.trim(),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      setContactSuccess(true);
+      setTimeout(() => setContactSuccess(false), 4000);
+    } catch (err) {
+      setContactError(err instanceof Error ? err.message : 'Failed to save contact settings');
+      handleFirestoreError(err, OperationType.WRITE, 'settings/contact');
+    } finally {
+      setContactSaving(false);
     }
   };
 
@@ -745,13 +963,13 @@ export function AdminPage() {
 
       {/* Workspace Tabs */}
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-zinc-900 rounded-xl border border-slate-200/70 dark:border-zinc-800">
-          {(['software', 'coupons', 'analytics', 'heroBanner'] as AdminTab[]).map((tab) => (
+        <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-zinc-900 rounded-xl border border-slate-200/70 dark:border-zinc-800 overflow-x-auto">
+          {(['software', 'coupons', 'analytics', 'heroBanner', 'seoSettings'] as AdminTab[]).map((tab) => (
             <button
               key={tab}
               type="button"
               onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
+              className={`px-4 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
                 activeTab === tab
                   ? 'bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-50 shadow-xs'
                   : 'text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-200'
@@ -1084,6 +1302,130 @@ export function AdminPage() {
         </div>
       )}
 
+      {/* Tab 5: SEO, Contact & Sitemap Settings */}
+      {activeTab === 'seoSettings' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          {/* Contact & Social Profile Form */}
+          <div className="lg:col-span-7 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 sm:p-8 space-y-6">
+            <div>
+              <h2 className="font-display text-xl font-bold text-slate-900 dark:text-zinc-50 flex items-center gap-2">
+                <Mail className="w-5 h-5 text-teal-700 dark:text-teal-400" />
+                Contact &amp; Brand Identity (Footer + Google Schema)
+              </h2>
+              <p className="text-sm text-slate-500 dark:text-zinc-400 mt-1">
+                Displayed in the public footer and embedded in Schema.org Organization metadata for Google trust signals.
+              </p>
+            </div>
+
+            {contactError && (
+              <div className="rounded-xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/30 p-3 text-xs text-red-700 dark:text-red-300">
+                {contactError}
+              </div>
+            )}
+
+            {contactSuccess && (
+              <div className="rounded-xl border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50 dark:bg-emerald-950/30 p-3 text-xs text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
+                <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                Contact &amp; social details saved successfully!
+              </div>
+            )}
+
+            <form onSubmit={handleSaveContactSettings} className="space-y-4">
+              <div>
+                <label className="text-xs font-medium text-slate-700 dark:text-zinc-300 block mb-1">
+                  Support / Contact Email (Gmail)
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={contactEmail}
+                  onChange={(e) => setContactEmail(e.target.value)}
+                  placeholder="obaedulhaque19@gmail.com"
+                  className="w-full h-10 px-3 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 text-sm text-slate-900 dark:text-zinc-100"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-slate-700 dark:text-zinc-300 block mb-1">
+                  Facebook Page URL (Demo placeholder — update when page is created)
+                </label>
+                <input
+                  type="url"
+                  value={facebookUrl}
+                  onChange={(e) => setFacebookUrl(e.target.value)}
+                  placeholder="https://www.facebook.com/toolpotro"
+                  className="w-full h-10 px-3 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 text-sm font-mono text-slate-900 dark:text-zinc-100"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={contactSaving}
+                className="h-10 px-5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-semibold inline-flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {contactSaving ? 'Saving...' : 'Save Contact & Brand Info'}
+              </button>
+            </form>
+          </div>
+
+          {/* Search Engine Indexing Endpoints & Verification */}
+          <div className="lg:col-span-5 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 sm:p-8 space-y-5">
+            <div>
+              <h2 className="font-display text-lg font-bold text-slate-900 dark:text-zinc-50 flex items-center gap-2">
+                <Globe className="w-5 h-5 text-teal-700 dark:text-teal-400" />
+                Google &amp; AI Crawler Endpoints
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1">
+                Automatically updated whenever you publish, edit, or archive software packages.
+              </p>
+            </div>
+
+            <div className="space-y-2.5 text-xs">
+              <a
+                href="/sitemap.xml"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-between p-3 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 hover:border-teal-600/40 transition-colors"
+              >
+                <div>
+                  <p className="font-mono font-semibold text-slate-900 dark:text-zinc-100">/sitemap.xml</p>
+                  <p className="text-slate-500 dark:text-zinc-400">Dynamic XML sitemap of all active software</p>
+                </div>
+                <ExternalLink className="w-4 h-4 text-teal-600 shrink-0" />
+              </a>
+
+              <a
+                href="/robots.txt"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-between p-3 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 hover:border-teal-600/40 transition-colors"
+              >
+                <div>
+                  <p className="font-mono font-semibold text-slate-900 dark:text-zinc-100">/robots.txt</p>
+                  <p className="text-slate-500 dark:text-zinc-400">Allows public pages; hides /admin &amp; /api</p>
+                </div>
+                <ExternalLink className="w-4 h-4 text-teal-600 shrink-0" />
+              </a>
+            </div>
+
+            {Object.keys(slugRedirects).length > 0 && (
+              <div className="pt-3 border-t border-slate-200 dark:border-zinc-800 space-y-2">
+                <p className="text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                  Active 301 Slug Redirects ({Object.keys(slugRedirects).length})
+                </p>
+                <div className="max-h-32 overflow-y-auto space-y-1 text-[11px] font-mono text-slate-600 dark:text-zinc-400">
+                  {Object.entries(slugRedirects).map(([oldId, newId]) => (
+                    <div key={oldId} className="truncate">
+                      /{oldId} → /{newId}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Software Add/Edit Modal */}
       {showSoftwareModal && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-start sm:items-center justify-center p-4">
@@ -1129,12 +1471,16 @@ export function AdminPage() {
                   <label className="text-xs font-medium text-slate-600 dark:text-zinc-400">Slug (ID)</label>
                   <input
                     required
-                    disabled={Boolean(editingId)}
                     value={softwareForm.slug}
                     onChange={(e) => setSoftwareForm({ ...softwareForm, slug: e.target.value })}
                     placeholder="potro-sync-desktop"
-                    className="mt-1 w-full h-10 px-3 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 text-sm font-mono disabled:opacity-50"
+                    className="mt-1 w-full h-10 px-3 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 text-sm font-mono"
                   />
+                  {editingId && cleanSlugPreview && cleanSlugPreview !== editingId && (
+                    <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-400">
+                      Old URL /software/{editingId} will auto-redirect (301) to /software/{cleanSlugPreview}.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -1406,6 +1752,54 @@ export function AdminPage() {
                   onChange={(e) => setSoftwareForm({ ...softwareForm, installGuide: e.target.value })}
                   className="mt-1 w-full p-3 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 text-sm"
                 />
+              </div>
+
+              {/* Live Rank Math-Style SEO Score & Google Search Preview */}
+              <div className="rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50/80 dark:bg-zinc-950/70 p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-slate-800 dark:text-zinc-200">
+                    SEO Health &amp; Google Snippet Preview
+                  </span>
+                  <span
+                    className={`font-mono text-xs font-bold px-2.5 py-0.5 rounded-md ${
+                      seoAudit.score >= 80
+                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+                        : seoAudit.score >= 50
+                        ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
+                        : 'bg-red-500/15 text-red-700 dark:text-red-400'
+                    }`}
+                  >
+                    {seoAudit.score} / 100
+                  </span>
+                </div>
+
+                <div className="rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-3 space-y-1">
+                  <p className="text-[11px] font-mono text-slate-500 dark:text-zinc-400 truncate">
+                    toolpotro › software › {cleanSlugPreview || 'slug'}
+                  </p>
+                  <p className="text-sm font-semibold text-blue-700 dark:text-sky-400 truncate">
+                    {seoAudit.titlePreview}
+                  </p>
+                  <p className="text-xs text-slate-600 dark:text-zinc-400 line-clamp-2">
+                    {softwareForm.tagline.trim() || 'Add a concise tagline describing key features and target OS.'}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                  {seoAudit.checks.map((chk) => (
+                    <div
+                      key={chk.label}
+                      className="flex items-start gap-1.5 text-[11px] text-slate-600 dark:text-zinc-400"
+                    >
+                      {chk.ok ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                      ) : (
+                        <AlertCircle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                      )}
+                      <span>{chk.label}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
 
               <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-200 dark:border-zinc-800">

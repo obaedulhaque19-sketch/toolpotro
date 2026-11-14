@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   onSnapshot,
   query,
@@ -35,6 +36,7 @@ import type { CouponCode, SoftwareItem } from '../types';
 
 export function SoftwareDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const { t } = useApp();
 
   const [item, setItem] = useState<SoftwareItem | null>(null);
@@ -65,8 +67,21 @@ export function SoftwareDetailPage() {
     const path = `software/${id}`;
     const unsubscribe = onSnapshot(
       doc(db, 'software', id),
-      (snap) => {
+      async (snap) => {
         if (!snap.exists()) {
+          try {
+            const redirSnap = await getDoc(doc(db, 'settings', 'redirects'));
+            const map = redirSnap.exists()
+              ? (redirSnap.data()?.redirects as Record<string, string> | undefined)
+              : undefined;
+            const nextSlug = map?.[id];
+            if (nextSlug && nextSlug !== id) {
+              navigate(`/software/${nextSlug}`, { replace: true });
+              return;
+            }
+          } catch {
+            // Fall through to notFound
+          }
           setNotFound(true);
           setItem(null);
         } else {
@@ -81,7 +96,7 @@ export function SoftwareDetailPage() {
       }
     );
     return () => unsubscribe();
-  }, [id]);
+  }, [id, navigate]);
 
   useEffect(() => {
     if (item) {

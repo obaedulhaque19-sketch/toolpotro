@@ -102,10 +102,13 @@
     },
     "SiteSettings": {
       "title": "SiteSettings",
-      "description": "Global website configuration such as hero banner image URL.",
+      "description": "Global website configuration such as hero banner, contact email, social links, and slug redirects.",
       "type": "object",
       "properties": {
         "heroImageUrl": { "type": "string", "maxLength": 1000 },
+        "contactEmail": { "type": "string", "format": "email", "maxLength": 200 },
+        "facebookUrl": { "type": "string", "maxLength": 1000 },
+        "redirects": { "type": "object" },
         "updatedAt": { "type": "string", "format": "date-time" }
       }
     }

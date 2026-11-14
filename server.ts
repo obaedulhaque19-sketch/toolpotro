@@ -132,6 +132,193 @@ function escapeHtmlAttr(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
+function escapeXml(value: string): string {
+  return escapeHtmlAttr(value);
+}
+
+interface ActiveSeoListItem {
+  id: string;
+  name: string;
+  version: string;
+  platform: string;
+  fileType: string;
+  tagline: string;
+  updatedAtIso: string;
+}
+
+let activeSoftwareCache: { expiresAt: number; items: ActiveSeoListItem[] } | null = null;
+let contactSettingsCache: {
+  expiresAt: number;
+  data: { contactEmail: string; facebookUrl: string };
+} | null = null;
+let redirectsCache: { expiresAt: number; map: Record<string, string> } | null = null;
+
+async function fetchAllActiveSoftwareForSeo(): Promise<ActiveSeoListItem[]> {
+  const now = Date.now();
+  if (activeSoftwareCache && activeSoftwareCache.expiresAt > now) {
+    return activeSoftwareCache.items;
+  }
+
+  const cfg = getFirebasePublicConfig();
+  if (!cfg.apiKey || !cfg.projectId) {
+    return [];
+  }
+
+  try {
+    const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+      cfg.projectId
+    )}/databases/${encodeURIComponent(cfg.databaseId)}/documents:runQuery?key=${encodeURIComponent(
+      cfg.apiKey
+    )}`;
+
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: 'software' }],
+          where: {
+            fieldFilter: {
+              field: { fieldPath: 'status' },
+              op: 'EQUAL',
+              value: { stringValue: 'active' },
+            },
+          },
+          limit: 500,
+        },
+      }),
+      signal: AbortSignal.timeout(3500),
+    });
+
+    if (!resp.ok) {
+      return activeSoftwareCache?.items || [];
+    }
+
+    const rows = (await resp.json()) as Array<{
+      document?: {
+        name?: string;
+        updateTime?: string;
+        fields?: Record<string, { stringValue?: string }>;
+      };
+    }>;
+
+    const list: ActiveSeoListItem[] = [];
+    for (const row of rows) {
+      const doc = row.document;
+      if (!doc?.name || !doc.fields) continue;
+      const id = doc.name.split('/').pop() || '';
+      if (!id) continue;
+      list.push({
+        id,
+        name: doc.fields.name?.stringValue || id,
+        version: doc.fields.version?.stringValue || 'v1.0',
+        platform: doc.fields.platform?.stringValue || 'Cross-Platform',
+        fileType: doc.fields.fileType?.stringValue || '',
+        tagline: doc.fields.tagline?.stringValue || '',
+        updatedAtIso: doc.updateTime || new Date().toISOString(),
+      });
+    }
+
+    activeSoftwareCache = { expiresAt: now + 60_000, items: list };
+    return list;
+  } catch {
+    return activeSoftwareCache?.items || [];
+  }
+}
+
+async function fetchContactSettings(): Promise<{ contactEmail: string; facebookUrl: string }> {
+  const defaults = {
+    contactEmail: 'obaedulhaque19@gmail.com',
+    facebookUrl: 'https://www.facebook.com/toolpotro',
+  };
+  const now = Date.now();
+  if (contactSettingsCache && contactSettingsCache.expiresAt > now) {
+    return contactSettingsCache.data;
+  }
+
+  const cfg = getFirebasePublicConfig();
+  if (!cfg.apiKey || !cfg.projectId) return defaults;
+
+  try {
+    const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+      cfg.projectId
+    )}/databases/${encodeURIComponent(
+      cfg.databaseId
+    )}/documents/settings/contact?key=${encodeURIComponent(cfg.apiKey)}`;
+    const resp = await fetch(endpoint, { signal: AbortSignal.timeout(2000) });
+    if (!resp.ok) {
+      contactSettingsCache = { expiresAt: now + 60_000, data: defaults };
+      return defaults;
+    }
+    const json = (await resp.json()) as {
+      fields?: {
+        contactEmail?: { stringValue?: string };
+        facebookUrl?: { stringValue?: string };
+      };
+    };
+    const data = {
+      contactEmail: json.fields?.contactEmail?.stringValue?.trim() || defaults.contactEmail,
+      facebookUrl: json.fields?.facebookUrl?.stringValue?.trim() || defaults.facebookUrl,
+    };
+    contactSettingsCache = { expiresAt: now + 60_000, data };
+    return data;
+  } catch {
+    return defaults;
+  }
+}
+
+async function fetchSlugRedirects(): Promise<Record<string, string>> {
+  const now = Date.now();
+  if (redirectsCache && redirectsCache.expiresAt > now) {
+    return redirectsCache.map;
+  }
+
+  const cfg = getFirebasePublicConfig();
+  if (!cfg.apiKey || !cfg.projectId) return {};
+
+  try {
+    const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+      cfg.projectId
+    )}/databases/${encodeURIComponent(
+      cfg.databaseId
+    )}/documents/settings/redirects?key=${encodeURIComponent(cfg.apiKey)}`;
+    const resp = await fetch(endpoint, { signal: AbortSignal.timeout(2000) });
+    if (!resp.ok) {
+      redirectsCache = { expiresAt: now + 60_000, map: {} };
+      return {};
+    }
+    const json = (await resp.json()) as {
+      fields?: {
+        redirects?: {
+          mapValue?: { fields?: Record<string, { stringValue?: string }> };
+        };
+      };
+    };
+    const rawFields = json.fields?.redirects?.mapValue?.fields || {};
+    const map: Record<string, string> = {};
+    for (const [k, v] of Object.entries(rawFields)) {
+      if (typeof v?.stringValue === 'string' && v.stringValue.trim()) {
+        map[k] = v.stringValue.trim();
+      }
+    }
+    redirectsCache = { expiresAt: now + 60_000, map };
+    return map;
+  } catch {
+    return {};
+  }
+}
+
+function resolveRequestOrigin(req: express.Request): string {
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https')
+    .split(',')[0]
+    .trim();
+  const host = String(req.headers['x-forwarded-host'] || req.get('host') || '')
+    .split(',')[0]
+    .trim();
+  const envUrl = process.env.APP_URL ? process.env.APP_URL.replace(/\/+$/, '') : '';
+  return envUrl || (host ? `${forwardedProto}://${host}` : '');
+}
+
 function buildSeoDescription(item: PublicSoftwareMeta): string {
   const downloads = `${item.downloadsCount.toLocaleString('en-US')} downloads`;
   const priceLabel = item.price > 0 ? `$${item.price}` : 'Free';
@@ -474,6 +661,60 @@ async function startServer() {
     }
   });
 
+  // Dynamic robots.txt for Googlebot & AI Search Crawlers
+  app.get('/robots.txt', (req, res) => {
+    const origin = resolveRequestOrigin(req);
+    const lines = [
+      'User-agent: *',
+      'Allow: /',
+      'Allow: /software/',
+      'Disallow: /admin',
+      'Disallow: /api/',
+      ...(origin ? ['', `Sitemap: ${origin}/sitemap.xml`] : []),
+    ];
+    res.set('Cache-Control', 'public, max-age=3600').type('text/plain').send(lines.join('\n'));
+  });
+
+  // Dynamic XML Sitemap of all active software pages + platform directories
+  app.get('/sitemap.xml', async (req, res) => {
+    const origin = resolveRequestOrigin(req) || 'https://toolpotro.onrender.com';
+    const items = await fetchAllActiveSoftwareForSeo();
+    const today = new Date().toISOString().slice(0, 10);
+
+    const staticUrls = [
+      { loc: `${origin}/`, lastmod: today, changefreq: 'daily', priority: '1.0' },
+      { loc: `${origin}/?platform=Windows`, lastmod: today, changefreq: 'daily', priority: '0.8' },
+      { loc: `${origin}/?platform=Android`, lastmod: today, changefreq: 'daily', priority: '0.8' },
+      { loc: `${origin}/?platform=Chrome`, lastmod: today, changefreq: 'daily', priority: '0.8' },
+      { loc: `${origin}/?platform=macOS`, lastmod: today, changefreq: 'weekly', priority: '0.7' },
+    ];
+
+    const softwareUrls = items.map((item) => ({
+      loc: `${origin}/software/${encodeURIComponent(item.id)}`,
+      lastmod: item.updatedAtIso.slice(0, 10),
+      changefreq: 'weekly',
+      priority: '0.9',
+    }));
+
+    const xmlEntries = [...staticUrls, ...softwareUrls]
+      .map(
+        (u) => `  <url>
+    <loc>${escapeXml(u.loc)}</loc>
+    <lastmod>${escapeXml(u.lastmod)}</lastmod>
+    <changefreq>${u.changefreq}</changefreq>
+    <priority>${u.priority}</priority>
+  </url>`
+      )
+      .join('\n');
+
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${xmlEntries}
+</urlset>`;
+
+    res.set('Cache-Control', 'public, max-age=600').type('application/xml').send(xml);
+  });
+
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
@@ -494,20 +735,21 @@ async function startServer() {
         return res.sendFile(indexHtmlPath);
       }
 
-      const forwardedProto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https')
-        .split(',')[0]
-        .trim();
-      const host = String(req.headers['x-forwarded-host'] || req.get('host') || '')
-        .split(',')[0]
-        .trim();
-      const envUrl = process.env.APP_URL ? process.env.APP_URL.replace(/\/+$/, '') : '';
-      const origin = envUrl || (host ? `${forwardedProto}://${host}` : '');
-
+      const origin = resolveRequestOrigin(req);
       if (!origin) {
         return res.type('html').send(cachedHtml);
       }
 
       const softwareMatch = req.path.match(/^\/software\/([a-zA-Z0-9_-]{1,128})\/?$/);
+      if (softwareMatch) {
+        const requestedId = softwareMatch[1];
+        const redirects = await fetchSlugRedirects();
+        const redirectTarget = redirects[requestedId];
+        if (redirectTarget && redirectTarget !== requestedId) {
+          return res.redirect(301, `/software/${encodeURIComponent(redirectTarget)}`);
+        }
+      }
+
       const softwareItem = softwareMatch ? await fetchPublicSoftwareMeta(softwareMatch[1]) : null;
 
       const cleanPath = req.path === '/' ? '/' : req.path.replace(/\/+$/, '');
@@ -557,6 +799,19 @@ async function startServer() {
           },
         }).replace(/<\/script/gi, '<\\/script');
 
+        // Semantic SSR content inside #root so Googlebot & AI crawlers read full details immediately; React replaces #root cleanly on load.
+        const ssrFallbackHtml = `<main style="max-width:960px;margin:0 auto;padding:24px;font-family:sans-serif"><h1>${escapeHtmlAttr(
+          softwareItem.name
+        )} (${escapeHtmlAttr(softwareItem.version)})</h1><p>${escapeHtmlAttr(
+          softwareItem.tagline
+        )}</p><p>Platform: ${escapeHtmlAttr(softwareItem.platform)} (${escapeHtmlAttr(
+          softwareItem.fileType
+        )}) · Size: ${escapeHtmlAttr(
+          softwareItem.fileSize
+        )} · Downloads: ${softwareItem.downloadsCount}</p><p>${escapeHtmlAttr(
+          softwareItem.description
+        )}</p><a href="/">Back to Toolpotro Catalog</a></main>`;
+
         let html = cachedHtml
           .replace(/<title>[\s\S]*?<\/title>/i, `<title>${safeTitle}</title>`)
           .replace(
@@ -598,7 +853,8 @@ async function startServer() {
           .replace(
             /<script\s+type="application\/ld\+json">[\s\S]*?<\/script>/i,
             `<script type="application/ld+json">\n      ${schemaJson}\n    </script>`
-          );
+          )
+          .replace('<div id="root"></div>', `<div id="root">${ssrFallbackHtml}</div>`);
 
         if (hasSoftwareThumb) {
           html = html
@@ -620,9 +876,80 @@ async function startServer() {
       }
 
       const ogImageUrl = `${origin}/og-preview.png`;
+      const [contact, activeList] = await Promise.all([
+        fetchContactSettings(),
+        fetchAllActiveSoftwareForSeo(),
+      ]);
+
+      const homeSchemaJson = JSON.stringify({
+        '@context': 'https://schema.org',
+        '@graph': [
+          {
+            '@type': 'Organization',
+            name: 'Toolpotro',
+            url: origin,
+            logo: `${origin}/favicon.png`,
+            email: contact.contactEmail,
+            ...(contact.facebookUrl ? { sameAs: [contact.facebookUrl] } : {}),
+          },
+          {
+            '@type': 'WebSite',
+            name: 'Toolpotro',
+            url: origin,
+            potentialAction: {
+              '@type': 'SearchAction',
+              target: `${origin}/?q={search_term_string}`,
+              'query-input': 'required name=search_term_string',
+            },
+          },
+          {
+            '@type': 'FAQPage',
+            mainEntity: [
+              {
+                '@type': 'Question',
+                name: 'Are downloads on Toolpotro direct and free of bundled installers?',
+                acceptedAnswer: {
+                  '@type': 'Answer',
+                  text: 'Yes. Every download button links directly to the published release file (.exe, .apk, .zip, or official store listing) without third-party download managers or redirect chains.',
+                },
+              },
+              {
+                '@type': 'Question',
+                name: 'Which platforms and file formats are supported?',
+                acceptedAnswer: {
+                  '@type': 'Answer',
+                  text: 'Toolpotro distributes Windows PC utilities (.exe / .zip), Android mobile applications (.apk), Chrome & Chromium browser extensions, macOS apps, and cross-platform developer tools.',
+                },
+              },
+            ],
+          },
+        ],
+      }).replace(/<\/script/gi, '<\\/script');
+
+      const catalogLinksHtml = activeList
+        .slice(0, 60)
+        .map(
+          (item) =>
+            `<li><a href="/software/${encodeURIComponent(item.id)}">${escapeHtmlAttr(
+              item.name
+            )} (${escapeHtmlAttr(item.version)})</a> - ${escapeHtmlAttr(
+              item.platform
+            )} · ${escapeHtmlAttr(item.tagline)}</li>`
+        )
+        .join('');
+
+      const homeSsrFallbackHtml = `<main style="max-width:960px;margin:0 auto;padding:24px;font-family:sans-serif"><h1>Toolpotro — Verified Software, Apps &amp; Browser Extensions</h1><p>Direct, verified distribution for Windows utilities (.exe, .zip), Android APKs (.apk), macOS apps, and browser extensions with installation guides.</p><ul>${catalogLinksHtml}</ul><footer><a href="mailto:${escapeHtmlAttr(
+        contact.contactEmail
+      )}">${escapeHtmlAttr(contact.contactEmail)}</a></footer></main>`;
+
       const html = cachedHtml
         .replace(/content="\/og-preview\.png"/g, `content="${ogImageUrl}"`)
         .replace(/"image": "\/og-preview\.png"/g, `"image": "${ogImageUrl}"`)
+        .replace(
+          /<script\s+type="application\/ld\+json">[\s\S]*?<\/script>/i,
+          `<script type="application/ld+json">\n      ${homeSchemaJson}\n    </script>`
+        )
+        .replace('<div id="root"></div>', `<div id="root">${homeSsrFallbackHtml}</div>`)
         .replace(
           '</head>',
           `  <meta property="og:url" content="${canonicalUrl}" />\n    <link rel="canonical" href="${canonicalUrl}" />\n  </head>`

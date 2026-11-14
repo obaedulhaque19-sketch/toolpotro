@@ -96,6 +96,7 @@ export interface Translations {
       coupons: string;
       analytics: string;
       heroBanner: string;
+      seoSettings: string;
     };
     heroBannerTitle: string;
     heroBannerSubtitle: string;
@@ -120,10 +121,26 @@ export interface Translations {
     archived: string;
     inactive: string;
   };
+  seoSection: {
+    eyebrow: string;
+    title: string;
+    subtitle: string;
+    pillars: {
+      title: string;
+      description: string;
+    }[];
+    faqTitle: string;
+    faqs: {
+      question: string;
+      answer: string;
+    }[];
+  };
   footer: {
     tagline: string;
     rights: string;
     directDistribution: string;
+    contactEmailLabel: string;
+    facebookLabel: string;
   };
 }
 
@@ -249,6 +266,7 @@ export const translations: Record<Language, Translations> = {
         coupons: 'Coupon Codes',
         analytics: 'Download Analytics',
         heroBanner: 'Hero Banner',
+        seoSettings: 'SEO & Contact',
       },
       heroBannerTitle: 'Hero Showcase Image',
       heroBannerSubtitle: 'Customize the main visual showcase displayed on the home page.',
@@ -273,10 +291,58 @@ export const translations: Record<Language, Translations> = {
       archived: 'Archived',
       inactive: 'Inactive',
     },
+    seoSection: {
+      eyebrow: 'About Toolpotro',
+      title: 'Clean, direct software distribution without adware clutter',
+      subtitle:
+        'Toolpotro is a curated directory for Windows desktop installers (.exe, .zip), signed Android APKs, macOS utilities, and browser extensions—served directly with clear version history and step-by-step installation guides.',
+      pillars: [
+        {
+          title: 'Direct File Access',
+          description:
+            'Every Windows utility, Android APK, and extension bundle downloads straight from verified release hosting without countdown timers or adware wrappers.',
+        },
+        {
+          title: 'Clear Version & Specs',
+          description:
+            'Inspect file size, target platform, version numbers, screenshots, and multi-language setup steps before downloading a single byte.',
+        },
+        {
+          title: 'Built-In Promo & Updates',
+          description:
+            'Redeem creator coupon codes on paid software releases and track authentic package updates from a single trusted hub.',
+        },
+      ],
+      faqTitle: 'Frequently Asked Questions',
+      faqs: [
+        {
+          question: 'Are downloads on Toolpotro direct and free of bundled installers?',
+          answer:
+            'Yes. Every download button links directly to the published release file (.exe, .apk, .zip, or official store listing) without third-party download managers or redirect chains.',
+        },
+        {
+          question: 'Which platforms and file formats are supported?',
+          answer:
+            'Toolpotro distributes Windows PC utilities (.exe / .zip), Android mobile applications (.apk), Chrome & Chromium browser extensions, macOS apps, and cross-platform developer tools.',
+        },
+        {
+          question: 'How do I install an Android APK or browser extension safely?',
+          answer:
+            'Open any software detail page on Toolpotro to read its tailored Installation Guide in English, Bengali, or Hindi, including exact permission and unpacking steps.',
+        },
+        {
+          question: 'How do promo coupons work on paid releases?',
+          answer:
+            'Click "Apply" on any paid software page and enter an active promo code to calculate the discounted price instantly before downloading.',
+        },
+      ],
+    },
     footer: {
       tagline: 'Clean, direct software distribution for desktop, mobile, and browser.',
       rights: 'All rights reserved.',
       directDistribution: 'Verified Direct Distribution',
+      contactEmailLabel: 'Support',
+      facebookLabel: 'Facebook',
     },
   },
 
@@ -401,6 +467,7 @@ export const translations: Record<Language, Translations> = {
         coupons: 'কুপন কোড',
         analytics: 'ডাউনলোড অ্যানালিটিক্স',
         heroBanner: 'হিরো ব্যানার',
+        seoSettings: 'SEO ও যোগাযোগ',
       },
       heroBannerTitle: 'হোমপেজ হিরো ব্যানার ইমেজ',
       heroBannerSubtitle: 'হোমপেজের মূল হিরো সেকশনে প্রদর্শিত ব্যানার ইমেজ পরিবর্তন করুন।',
@@ -425,10 +492,58 @@ export const translations: Record<Language, Translations> = {
       archived: 'আর্কাইভড',
       inactive: 'নিষ্ক্রিয়',
     },
+    seoSection: {
+      eyebrow: 'টুলপত্র সম্পর্কে',
+      title: 'অ্যাডওয়্যার বা ঝামেলা ছাড়াই সরাসরি ও নিরাপদ সফটওয়্যার ডিস্ট্রিবিউশন',
+      subtitle:
+        'উইন্ডোজ ডেস্কটপ সফটওয়্যার (.exe, .zip), অ্যান্ড্রয়েড অ্যাপ (.apk), ম্যাকওএস ইউটিলিটি এবং ব্রাউজার এক্সটেনশন—সবকিছু স্পষ্ট ভার্সন, ফাইল সাইজ ও বাংলা-ইংরেজি ইনস্টলেশন গাইডসহ সরাসরি ডাউনলোডের নির্ভরযোগ্য ঠিকানা Toolpotro।',
+      pillars: [
+        {
+          title: 'সরাসরি ফাইল ডাউনলোড',
+          description:
+            'কোনো টাইমার, ভুয়া বাটন বা থার্ড-পার্টি ডাউনলোডার ছাড়াই সরাসরি ভেরিফায়েড রিলিজ থেকে ফাইল ডাউনলোড করতে পারবেন।',
+        },
+        {
+          title: 'স্পষ্ট তথ্য ও স্ক্রিনশট',
+          description:
+            'ডাউনলোডের আগেই প্রতিটি সফটওয়্যারের ভার্সন, ফাইল সাইজ, প্ল্যাটফর্ম, স্ক্রিনশট ও ধাপে ধাপে ইনস্টল গাইড দেখে নিতে পারবেন।',
+        },
+        {
+          title: 'প্রোমো কুপন ও আপডেট',
+          description:
+            'পেইড সফটওয়্যারে অ্যাক্টিভ কুপন কোড ব্যবহার করে ডিসকাউন্ট পান এবং নির্ভরযোগ্য আপডেট একই প্ল্যাটফর্ম থেকে সংগ্রহ করুন।',
+        },
+      ],
+      faqTitle: 'সচরাচর জিজ্ঞাসিত প্রশ্ন (FAQ)',
+      faqs: [
+        {
+          question: 'Toolpotro থেকে ডাউনলোড করলে কি কোনো অতিরিক্ত অ্যাডওয়্যার বা স্প্যাম থাকে?',
+          answer:
+            'না। প্রতিটি ডাউনলোড বাটন সরাসরি মূল সফটওয়্যার ফাইলে (.exe, .apk, .zip বা অফিশিয়াল স্টোর লিংকে) নিয়ে যায়—কোনো বিজ্ঞাপন-ভরা রিডাইরেক্ট নেই।',
+        },
+        {
+          question: 'এখানে কোন কোন প্ল্যাটফর্মের সফটওয়্যার পাওয়া যায়?',
+          answer:
+            'টুলপত্রে উইন্ডোজ পিসি ইউটিলিটি (.exe / .zip), অ্যান্ড্রয়েড অ্যাপ (.apk), ক্রোম ব্রাউজার এক্সটেনশন, ম্যাকওএস ও ক্রস-প্ল্যাটফর্ম টুলস পাওয়া যায়।',
+        },
+        {
+          question: 'অ্যান্ড্রয়েড APK বা ব্রাউজার এক্সটেনশন ইনস্টল করার নিয়ম কোথায় পাবো?',
+          answer:
+            'যেকোনো সফটওয়্যারের বিস্তারিত পেজে ঢুকলেই নিচে বাংলা, ইংরেজি ও হিন্দিতে ধাপে ধাপে ইনস্টলেশন গাইড দেওয়া আছে।',
+        },
+        {
+          question: 'পেইড সফটওয়্যারে কুপন কোড কীভাবে ব্যবহার করবো?',
+          answer:
+            'সফটওয়্যার পেজে থাকা কুপন অপশনে ক্লিক করে কোড বসিয়ে "প্রয়োগ করুন" চাপলেই তাৎক্ষণিক ডিসকাউন্ট হিসাব হয়ে যাবে।',
+        },
+      ],
+    },
     footer: {
       tagline: 'ডেস্কটপ, মোবাইল এবং ব্রাউজারের জন্য নিরাপদ ও সরাসরি সফটওয়্যার বিতরণ।',
       rights: 'সর্বস্বত্ব সংরক্ষিত।',
       directDistribution: 'যাচাইকৃত সরাসরি বিতরণ',
+      contactEmailLabel: 'যোগাযোগ',
+      facebookLabel: 'ফেসবুক',
     },
   },
 
@@ -553,6 +668,7 @@ export const translations: Record<Language, Translations> = {
         coupons: 'कूपन कोड',
         analytics: 'डाउनलोड एनालिटिक्स',
         heroBanner: 'हीरो बैनर',
+        seoSettings: 'SEO और संपर्क',
       },
       heroBannerTitle: 'होमपेज हीरो बैनर इमेज',
       heroBannerSubtitle: 'होमपेज के मुख्य हीरो सेक्शन में दिखने वाली बैनर इमेज बदलें।',
@@ -577,10 +693,58 @@ export const translations: Record<Language, Translations> = {
       archived: 'आर्काइव्ड',
       inactive: 'निष्क्रिय',
     },
+    seoSection: {
+      eyebrow: 'Toolpotro के बारे में',
+      title: 'बिना किसी स्पैम या ऐडवेयर के सीधा और सुरक्षित सॉफ़्टवेयर वितरण',
+      subtitle:
+        'Toolpotro विंडोज़ डेस्कटॉप प्रोग्राम (.exe, .zip), एंड्रॉइड APK, macOS यूटिलिटी और ब्राउज़र एक्सटेंशन के लिए एक विश्वसनीय डायरेक्टरी है—स्पष्ट वर्ज़न और आसान इंस्टॉलेशन गाइड के साथ।',
+      pillars: [
+        {
+          title: 'डायरेक्ट फ़ाइल डाउनलोड',
+          description:
+            'बिना किसी काउंटडाउन या थर्ड-पार्टी डाउनलोडर के सीधे सत्यापित रिलीज़ से सुरक्षित फ़ाइल डाउनलोड करें।',
+        },
+        {
+          title: 'संपूर्ण विवरण व स्क्रीनशॉट',
+          description:
+            'डाउनलोड करने से पहले फ़ाइल आकार, प्लेटफ़ॉर्म, वर्ज़न, स्क्रीनशॉट और बहु-भाषी इंस्टॉलेशन गाइड देखें।',
+        },
+        {
+          title: 'प्रोमो कूपन व अपडेट्स',
+          description:
+            'पेड सॉफ़्टवेयर पर सक्रिय कूपन कोड लागू करें और एक ही भरोसेमंद हब से नवीनतम रिलीज़ प्राप्त करें।',
+        },
+      ],
+      faqTitle: 'अक्सर पूछे जाने वाले प्रश्न (FAQ)',
+      faqs: [
+        {
+          question: 'क्या Toolpotro के डाउनलोड सीधे और बिना किसी बंडल ऐडवेयर के हैं?',
+          answer:
+            'हाँ। हर डाउनलोड बटन सीधे प्रकाशित फ़ाइल (.exe, .apk, .zip या आधिकारिक स्टोर लिंक) तक ले जाता है, बिना किसी अनावश्यक रीडायरेक्ट के।',
+        },
+        {
+          question: 'कौन-कौन से प्लेटफ़ॉर्म और फ़ाइल फ़ॉर्मेट उपलब्ध हैं?',
+          answer:
+            'Toolpotro पर Windows टूल्स (.exe / .zip), Android ऐप्स (.apk), Chrome एक्सटेंशन, macOS और क्रॉस-प्लेटफ़ॉर्म पैकेज मिलते हैं।',
+        },
+        {
+          question: 'Android APK या ब्राउज़र एक्सटेंशन सुरक्षित रूप से कैसे इंस्टॉल करें?',
+          answer:
+            'किसी भी सॉफ़्टवेयर पेज पर जाएं—वहाँ अंग्रेज़ी, बांग्ला और हिंदी में चरण-दर-चरण इंस्टॉलेशन गाइड उपलब्ध है।',
+        },
+        {
+          question: 'पेड सॉफ़्टवेयर पर कूपन कोड कैसे काम करता है?',
+          answer:
+            'सॉफ़्टवेयर पेज पर कूपन बटन पर क्लिक करें, सक्रिय कोड डालें और तुरंत छूट के साथ अंतिम मूल्य देखें।',
+        },
+      ],
+    },
     footer: {
       tagline: 'डेस्कटॉप, मोबाइल और ब्राउज़र के लिए स्वच्छ, प्रत्यक्ष सॉफ़्टवेयर वितरण।',
       rights: 'सर्वाधिकार सुरक्षित।',
       directDistribution: 'सत्यापित प्रत्यक्ष वितरण',
+      contactEmailLabel: 'सहायता',
+      facebookLabel: 'Facebook',
     },
   },
 };

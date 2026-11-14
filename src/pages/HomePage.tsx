@@ -3,12 +3,16 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
 import {
   ArrowRight,
+  ChevronDown,
+  Download,
+  FileCheck2,
   Monitor,
   Package,
   PackageOpen,
   Search,
   ShieldCheck,
   Smartphone,
+  Tag,
   Wrench,
 } from 'lucide-react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
@@ -41,6 +45,7 @@ export function HomePage() {
 
   const [searchFocused, setSearchFocused] = useState(false);
   const [failedSuggestionImgs, setFailedSuggestionImgs] = useState<Record<string, boolean>>({});
+  const [openFaq, setOpenFaq] = useState<number | null>(0);
   const searchBoxRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -550,6 +555,91 @@ export function HomePage() {
             ))}
           </div>
         )}
+        </section>
+
+        {/* About Toolpotro & FAQ Section (SEO & User Trust Content) */}
+        <section
+          aria-labelledby="about-toolpotro-heading"
+          className="mt-12 sm:mt-14 space-y-6"
+        >
+          <div className="rounded-2xl border border-teal-900/15 dark:border-teal-500/20 bg-[#f2faf8]/92 dark:bg-[#081a1f]/92 backdrop-blur-xs p-5 sm:p-7 lg:p-8 space-y-6">
+            <div className="space-y-2 max-w-3xl">
+              <p className="font-mono text-xs font-semibold uppercase tracking-wider text-[#0d9488] dark:text-[#2ee6b8]">
+                {t.seoSection.eyebrow}
+              </p>
+              <h2
+                id="about-toolpotro-heading"
+                className="font-display text-xl sm:text-2xl font-bold tracking-tight text-[#062326] dark:text-white"
+              >
+                {t.seoSection.title}
+              </h2>
+              <p className="text-sm text-[#1e4347] dark:text-slate-300 leading-relaxed">
+                {t.seoSection.subtitle}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-5 pt-2">
+              {t.seoSection.pillars.map((pillar, idx) => {
+                const Icon = idx === 0 ? Download : idx === 1 ? FileCheck2 : Tag;
+                return (
+                  <div
+                    key={pillar.title}
+                    className="rounded-xl border border-teal-900/10 dark:border-teal-500/15 bg-[#e6f4f0]/80 dark:bg-[#0b2228]/85 p-4 sm:p-5 space-y-2"
+                  >
+                    <div className="w-9 h-9 rounded-lg bg-[#0d9488]/15 dark:bg-[#10d9a0]/15 text-[#0d9488] dark:text-[#2ee6b8] flex items-center justify-center">
+                      <Icon className="w-4 h-4" />
+                    </div>
+                    <h3 className="font-display text-base font-semibold text-[#062326] dark:text-white">
+                      {pillar.title}
+                    </h3>
+                    <p className="text-xs sm:text-[13px] text-[#1e4347] dark:text-slate-300 leading-relaxed">
+                      {pillar.description}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Compact Interactive FAQ Accordion */}
+            <div className="pt-4 border-t border-teal-900/10 dark:border-teal-500/15 space-y-3">
+              <h3 className="font-display text-base sm:text-lg font-bold text-[#062326] dark:text-white">
+                {t.seoSection.faqTitle}
+              </h3>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {t.seoSection.faqs.map((faq, idx) => {
+                  const isOpen = openFaq === idx;
+                  return (
+                    <div
+                      key={faq.question}
+                      className="rounded-xl border border-teal-900/10 dark:border-teal-500/15 bg-[#eaf6f3]/80 dark:bg-[#0b2228]/70 overflow-hidden"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setOpenFaq(isOpen ? null : idx)}
+                        aria-expanded={isOpen}
+                        className="w-full px-4 py-3 text-left flex items-center justify-between gap-3 cursor-pointer hover:bg-[#e1f1ec] dark:hover:bg-[#0e2a32] transition-colors"
+                      >
+                        <span className="font-display text-xs sm:text-sm font-semibold text-[#062326] dark:text-white leading-snug">
+                          {faq.question}
+                        </span>
+                        <ChevronDown
+                          className={`w-4 h-4 shrink-0 text-[#0d9488] dark:text-[#2ee6b8] transition-transform duration-200 ${
+                            isOpen ? 'rotate-180' : ''
+                          }`}
+                        />
+                      </button>
+                      {isOpen && (
+                        <div className="px-4 pb-3.5 pt-0.5 text-xs sm:text-[13px] text-[#1e4347] dark:text-slate-300 leading-relaxed border-t border-teal-900/10 dark:border-teal-500/10">
+                          {faq.answer}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
         </section>
       </div>
     </main>

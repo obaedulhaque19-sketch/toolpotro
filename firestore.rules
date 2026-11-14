@@ -112,8 +112,11 @@ service cloud.firestore {
     }
 
     function isValidSettings(data) {
-      return data.keys().hasOnly(['heroImageUrl', 'updatedAt']) &&
+      return data.keys().hasOnly(['heroImageUrl', 'contactEmail', 'facebookUrl', 'redirects', 'updatedAt']) &&
         (!('heroImageUrl' in data) || (data.heroImageUrl is string && data.heroImageUrl.size() <= 1000)) &&
+        (!('contactEmail' in data) || (data.contactEmail is string && data.contactEmail.size() <= 200)) &&
+        (!('facebookUrl' in data) || (data.facebookUrl is string && data.facebookUrl.size() <= 1000)) &&
+        (!('redirects' in data) || data.redirects is map) &&
         (!('updatedAt' in data) || data.updatedAt is timestamp);
     }
 
