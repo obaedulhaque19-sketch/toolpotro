@@ -423,25 +423,47 @@ async function startServer() {
       if (/^https?:\/\//i.test(thumbUrl)) {
         const imgRes = await fetch(thumbUrl, {
           redirect: 'follow',
-          signal: AbortSignal.timeout(3500),
+          signal: AbortSignal.timeout(7000),
           headers: { 'User-Agent': 'Toolpotro-OG-Fetcher/1.0' },
         });
-        const contentType = (imgRes.headers.get('content-type') || '').toLowerCase();
-        if (
-          imgRes.ok &&
-          (contentType.startsWith('image/png') ||
-            contentType.startsWith('image/jpeg') ||
-            contentType.startsWith('image/jpg') ||
-            contentType.startsWith('image/gif') ||
-            contentType.startsWith('image/webp'))
-        ) {
+        if (imgRes.ok) {
           const buf = Buffer.from(await imgRes.arrayBuffer());
-          if (buf.length > 0 && buf.length <= 5 * 1024 * 1024) {
-            return res
-              .status(200)
-              .set('Content-Type', contentType.split(';')[0])
-              .set('Cache-Control', 'public, max-age=3600')
-              .send(buf);
+          if (buf.length > 12 && buf.length <= 5 * 1024 * 1024) {
+            let detectedType = '';
+            if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+              detectedType = 'image/png';
+            } else if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+              detectedType = 'image/jpeg';
+            } else if (buf.subarray(0, 4).toString('ascii') === 'GIF8') {
+              detectedType = 'image/gif';
+            } else if (
+              buf.subarray(0, 4).toString('ascii') === 'RIFF' &&
+              buf.subarray(8, 12).toString('ascii') === 'WEBP'
+            ) {
+              detectedType = 'image/webp';
+            } else {
+              const headerType = (imgRes.headers.get('content-type') || '')
+                .split(';')[0]
+                .trim()
+                .toLowerCase();
+              if (
+                headerType === 'image/png' ||
+                headerType === 'image/jpeg' ||
+                headerType === 'image/jpg' ||
+                headerType === 'image/gif' ||
+                headerType === 'image/webp'
+              ) {
+                detectedType = headerType === 'image/jpg' ? 'image/jpeg' : headerType;
+              }
+            }
+
+            if (detectedType) {
+              return res
+                .status(200)
+                .set('Content-Type', detectedType)
+                .set('Cache-Control', 'public, max-age=3600')
+                .send(buf);
+            }
           }
         }
       }
