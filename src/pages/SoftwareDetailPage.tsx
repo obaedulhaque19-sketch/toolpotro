@@ -83,6 +83,15 @@ export function SoftwareDetailPage() {
     return () => unsubscribe();
   }, [id]);
 
+  useEffect(() => {
+    if (item) {
+      document.title = `${item.name} (${item.version}) — Toolpotro`;
+    }
+    return () => {
+      document.title = 'Toolpotro — Verified Software, Apps & Extensions';
+    };
+  }, [item]);
+
   // Fetch "Discover more" items
   useEffect(() => {
     const q = query(

@@ -9,18 +9,146 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-function getFirebaseApiKey(): string {
-  if (process.env.VITE_FIREBASE_API_KEY) return process.env.VITE_FIREBASE_API_KEY;
+interface FirebasePublicConfig {
+  apiKey: string;
+  projectId: string;
+  databaseId: string;
+}
+
+function getFirebasePublicConfig(): FirebasePublicConfig {
+  let fileCfg: { apiKey?: string; projectId?: string; firestoreDatabaseId?: string } = {};
   try {
     const configPath = path.resolve(__dirname, 'firebase-applet-config.json');
     if (fs.existsSync(configPath)) {
-      const parsed = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-      if (parsed.apiKey) return parsed.apiKey;
+      fileCfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
     }
   } catch {
     // Ignore fallback read errors
   }
-  return '';
+  return {
+    apiKey: process.env.VITE_FIREBASE_API_KEY || fileCfg.apiKey || '',
+    projectId: process.env.VITE_FIREBASE_PROJECT_ID || fileCfg.projectId || '',
+    databaseId:
+      process.env.VITE_FIREBASE_DATABASE_ID || fileCfg.firestoreDatabaseId || '(default)',
+  };
+}
+
+function getFirebaseApiKey(): string {
+  return getFirebasePublicConfig().apiKey;
+}
+
+interface PublicSoftwareMeta {
+  id: string;
+  name: string;
+  version: string;
+  platform: string;
+  category: string;
+  fileType: string;
+  fileSize: string;
+  tagline: string;
+  description: string;
+  thumbnailUrl: string;
+  price: number;
+  downloadsCount: number;
+}
+
+const softwareMetaCache = new Map<string, { expiresAt: number; data: PublicSoftwareMeta | null }>();
+
+async function fetchPublicSoftwareMeta(softwareId: string): Promise<PublicSoftwareMeta | null> {
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(softwareId)) {
+    return null;
+  }
+
+  const now = Date.now();
+  const cached = softwareMetaCache.get(softwareId);
+  if (cached && cached.expiresAt > now) {
+    return cached.data;
+  }
+
+  const cfg = getFirebasePublicConfig();
+  if (!cfg.apiKey || !cfg.projectId) {
+    return null;
+  }
+
+  try {
+    const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+      cfg.projectId
+    )}/databases/${encodeURIComponent(cfg.databaseId)}/documents/software/${encodeURIComponent(
+      softwareId
+    )}?key=${encodeURIComponent(cfg.apiKey)}`;
+
+    const resp = await fetch(endpoint, { signal: AbortSignal.timeout(2500) });
+    if (!resp.ok) {
+      softwareMetaCache.set(softwareId, { expiresAt: now + 30_000, data: null });
+      return null;
+    }
+
+    const docJson = (await resp.json()) as {
+      fields?: Record<
+        string,
+        { stringValue?: string; integerValue?: string; doubleValue?: number }
+      >;
+    };
+    const fields = docJson.fields;
+    if (!fields || fields.status?.stringValue !== 'active') {
+      softwareMetaCache.set(softwareId, { expiresAt: now + 30_000, data: null });
+      return null;
+    }
+
+    const item: PublicSoftwareMeta = {
+      id: softwareId,
+      name: fields.name?.stringValue || 'Toolpotro Software',
+      version: fields.version?.stringValue || 'v1.0',
+      platform: fields.platform?.stringValue || 'Cross-Platform',
+      category: fields.category?.stringValue || 'utility',
+      fileType: fields.fileType?.stringValue || '',
+      fileSize: fields.fileSize?.stringValue || '',
+      tagline: fields.tagline?.stringValue || '',
+      description: fields.description?.stringValue || '',
+      thumbnailUrl: fields.thumbnailUrl?.stringValue || '',
+      price: Number(fields.price?.doubleValue ?? fields.price?.integerValue ?? 0),
+      downloadsCount: Number(
+        fields.downloadsCount?.integerValue ?? fields.downloadsCount?.doubleValue ?? 0
+      ),
+    };
+
+    if (softwareMetaCache.size > 100) {
+      const oldestKey = softwareMetaCache.keys().next().value;
+      if (oldestKey) softwareMetaCache.delete(oldestKey);
+    }
+    softwareMetaCache.set(softwareId, { expiresAt: now + 60_000, data: item });
+    return item;
+  } catch {
+    return null;
+  }
+}
+
+function escapeHtmlAttr(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function buildSeoDescription(item: PublicSoftwareMeta): string {
+  const downloads = `${item.downloadsCount.toLocaleString('en-US')} downloads`;
+  const priceLabel = item.price > 0 ? `$${item.price}` : 'Free';
+  const specs = [item.platform, item.fileType, item.fileSize].filter(Boolean).join(' · ');
+  const base = [item.tagline, specs, downloads, priceLabel].filter(Boolean).join(' • ');
+  if (base.length <= 165) return base;
+  const suffix = ` • ${downloads} • ${priceLabel}`;
+  const maxTaglineLen = Math.max(40, 162 - suffix.length);
+  return `${item.tagline.slice(0, maxTaglineLen).trim()}...${suffix}`;
+}
+
+function resolveFallbackOgImagePath(): string | null {
+  const distImg = path.resolve(__dirname, 'dist', 'og-preview.png');
+  if (fs.existsSync(distImg)) return distImg;
+  const pubImg = path.resolve(__dirname, 'public', 'og-preview.png');
+  if (fs.existsSync(pubImg)) return pubImg;
+  return null;
 }
 
 async function verifyAdminToken(authHeader?: string): Promise<{ ok: boolean; error?: string }> {
@@ -255,6 +383,75 @@ async function startServer() {
     }
   });
 
+  // Social Link Preview Thumbnail Proxy for individual software pages (no 302 redirects for WhatsApp/Meta bots)
+  app.get('/api/og-thumbnail/:id', async (req, res) => {
+    const sendFallback = () => {
+      const fallbackPath = resolveFallbackOgImagePath();
+      if (fallbackPath) {
+        return res.set('Cache-Control', 'public, max-age=3600').sendFile(fallbackPath);
+      }
+      return res.status(404).end();
+    };
+
+    try {
+      const item = await fetchPublicSoftwareMeta(req.params.id);
+      const thumbUrl = item?.thumbnailUrl?.trim();
+      if (!thumbUrl) {
+        return sendFallback();
+      }
+
+      if (thumbUrl.startsWith('/') && !thumbUrl.startsWith('//')) {
+        const cleanRel = thumbUrl.replace(/^\/+/, '');
+        const candidates = [
+          path.resolve(__dirname, 'dist', cleanRel),
+          path.resolve(__dirname, 'public', cleanRel),
+        ];
+        for (const candidate of candidates) {
+          const distBase = path.resolve(__dirname, 'dist') + path.sep;
+          const pubBase = path.resolve(__dirname, 'public') + path.sep;
+          if (
+            (candidate.startsWith(distBase) || candidate.startsWith(pubBase)) &&
+            fs.existsSync(candidate) &&
+            fs.statSync(candidate).isFile()
+          ) {
+            return res.set('Cache-Control', 'public, max-age=3600').sendFile(candidate);
+          }
+        }
+        return sendFallback();
+      }
+
+      if (/^https?:\/\//i.test(thumbUrl)) {
+        const imgRes = await fetch(thumbUrl, {
+          redirect: 'follow',
+          signal: AbortSignal.timeout(3500),
+          headers: { 'User-Agent': 'Toolpotro-OG-Fetcher/1.0' },
+        });
+        const contentType = (imgRes.headers.get('content-type') || '').toLowerCase();
+        if (
+          imgRes.ok &&
+          (contentType.startsWith('image/png') ||
+            contentType.startsWith('image/jpeg') ||
+            contentType.startsWith('image/jpg') ||
+            contentType.startsWith('image/gif') ||
+            contentType.startsWith('image/webp'))
+        ) {
+          const buf = Buffer.from(await imgRes.arrayBuffer());
+          if (buf.length > 0 && buf.length <= 5 * 1024 * 1024) {
+            return res
+              .status(200)
+              .set('Content-Type', contentType.split(';')[0])
+              .set('Cache-Control', 'public, max-age=3600')
+              .send(buf);
+          }
+        }
+      }
+
+      return sendFallback();
+    } catch {
+      return sendFallback();
+    }
+  });
+
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
@@ -270,10 +467,11 @@ async function startServer() {
       : '';
 
     app.use(express.static(distPath, { maxAge: '1d', index: false }));
-    app.get('*', (req, res) => {
+    app.get('*', async (req, res) => {
       if (!cachedHtml) {
         return res.sendFile(indexHtmlPath);
       }
+
       const forwardedProto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https')
         .split(',')[0]
         .trim();
@@ -287,16 +485,125 @@ async function startServer() {
         return res.type('html').send(cachedHtml);
       }
 
-      const safePath = (req.originalUrl || '/').replace(/["<>]/g, '');
-      const pageUrl = `${origin}${safePath}`;
-      const ogImageUrl = `${origin}/og-preview.png`;
+      const softwareMatch = req.path.match(/^\/software\/([a-zA-Z0-9_-]{1,128})\/?$/);
+      const softwareItem = softwareMatch ? await fetchPublicSoftwareMeta(softwareMatch[1]) : null;
 
+      const cleanPath = req.path === '/' ? '/' : req.path.replace(/\/+$/, '');
+      const platformParam =
+        cleanPath === '/' && typeof req.query.platform === 'string' && req.query.platform
+          ? `?platform=${encodeURIComponent(req.query.platform)}`
+          : '';
+      const canonicalUrl = `${origin}${cleanPath}${platformParam}`.replace(/["<>]/g, '');
+
+      if (softwareItem) {
+        const title = `${softwareItem.name} (${softwareItem.version}) — Toolpotro`;
+        const desc = buildSeoDescription(softwareItem);
+        const hasSoftwareThumb = Boolean(softwareItem.thumbnailUrl?.trim());
+        const ogImageUrl = hasSoftwareThumb
+          ? `${origin}/api/og-thumbnail/${encodeURIComponent(softwareItem.id)}`
+          : `${origin}/og-preview.png`;
+
+        const safeTitle = escapeHtmlAttr(title);
+        const safeDesc = escapeHtmlAttr(desc);
+        const safeAlt = escapeHtmlAttr(`${softwareItem.name} logo`);
+
+        const schemaJson = JSON.stringify({
+          '@context': 'https://schema.org',
+          '@type': 'SoftwareApplication',
+          name: softwareItem.name,
+          softwareVersion: softwareItem.version,
+          operatingSystem: softwareItem.platform,
+          applicationCategory:
+            softwareItem.category === 'android'
+              ? 'MobileApplication'
+              : softwareItem.category === 'extension'
+              ? 'BrowserApplication'
+              : 'DesktopEnhancementApplication',
+          fileSize: softwareItem.fileSize,
+          description: softwareItem.tagline || softwareItem.description.slice(0, 200),
+          image: ogImageUrl,
+          url: canonicalUrl,
+          offers: {
+            '@type': 'Offer',
+            price: String(softwareItem.price > 0 ? softwareItem.price : 0),
+            priceCurrency: 'USD',
+          },
+          interactionStatistic: {
+            '@type': 'InteractionCounter',
+            interactionType: 'https://schema.org/DownloadAction',
+            userInteractionCount: softwareItem.downloadsCount,
+          },
+        }).replace(/<\/script/gi, '<\\/script');
+
+        let html = cachedHtml
+          .replace(/<title>[\s\S]*?<\/title>/i, `<title>${safeTitle}</title>`)
+          .replace(
+            /<meta\s+name="description"\s+content="[^"]*"\s*\/?>/i,
+            `<meta name="description" content="${safeDesc}" />`
+          )
+          .replace(
+            /<meta\s+property="og:title"\s+content="[^"]*"\s*\/?>/i,
+            `<meta property="og:title" content="${safeTitle}" />`
+          )
+          .replace(
+            /<meta\s+property="og:description"\s+content="[^"]*"\s*\/?>/i,
+            `<meta property="og:description" content="${safeDesc}" />`
+          )
+          .replace(
+            /<meta\s+property="og:image"\s+content="[^"]*"\s*\/?>/i,
+            `<meta property="og:image" content="${ogImageUrl}" />`
+          )
+          .replace(
+            /<meta\s+property="og:image:secure_url"\s+content="[^"]*"\s*\/?>/i,
+            `<meta property="og:image:secure_url" content="${ogImageUrl}" />`
+          )
+          .replace(
+            /<meta\s+property="og:image:alt"\s+content="[^"]*"\s*\/?>/i,
+            `<meta property="og:image:alt" content="${safeAlt}" />`
+          )
+          .replace(
+            /<meta\s+name="twitter:title"\s+content="[^"]*"\s*\/?>/i,
+            `<meta name="twitter:title" content="${safeTitle}" />`
+          )
+          .replace(
+            /<meta\s+name="twitter:description"\s+content="[^"]*"\s*\/?>/i,
+            `<meta name="twitter:description" content="${safeDesc}" />`
+          )
+          .replace(
+            /<meta\s+name="twitter:image"\s+content="[^"]*"\s*\/?>/i,
+            `<meta name="twitter:image" content="${ogImageUrl}" />`
+          )
+          .replace(
+            /<script\s+type="application\/ld\+json">[\s\S]*?<\/script>/i,
+            `<script type="application/ld+json">\n      ${schemaJson}\n    </script>`
+          );
+
+        if (hasSoftwareThumb) {
+          html = html
+            .replace(/<meta\s+property="og:image:type"\s+content="[^"]*"\s*\/?>\s*/i, '')
+            .replace(/<meta\s+property="og:image:width"\s+content="[^"]*"\s*\/?>\s*/i, '')
+            .replace(/<meta\s+property="og:image:height"\s+content="[^"]*"\s*\/?>\s*/i, '')
+            .replace(
+              /<meta\s+name="twitter:card"\s+content="[^"]*"\s*\/?>/i,
+              `<meta name="twitter:card" content="summary" />`
+            );
+        }
+
+        html = html.replace(
+          '</head>',
+          `  <meta property="og:url" content="${canonicalUrl}" />\n    <link rel="canonical" href="${canonicalUrl}" />\n  </head>`
+        );
+
+        return res.set('Cache-Control', 'no-cache').type('html').send(html);
+      }
+
+      const ogImageUrl = `${origin}/og-preview.png`;
       const html = cachedHtml
         .replace(/content="\/og-preview\.png"/g, `content="${ogImageUrl}"`)
         .replace(/"image": "\/og-preview\.png"/g, `"image": "${ogImageUrl}"`)
         .replace(
           '</head>',
-          `  <meta property="og:url" content="${pageUrl}" />\n    <link rel="canonical" href="${pageUrl}" />\n  </head>`
+          `  <meta property="og:url" content="${canonicalUrl}" />\n    <link rel="canonical" href="${canonicalUrl}" />\n  </head>`
         );
 
       return res.set('Cache-Control', 'no-cache').type('html').send(html);
