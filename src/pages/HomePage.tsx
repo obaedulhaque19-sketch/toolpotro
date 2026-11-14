@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
 import {
   ArrowRight,
   Monitor,
+  Package,
   PackageOpen,
   Search,
   ShieldCheck,
@@ -37,6 +38,20 @@ export function HomePage() {
 
   const [heroImage, setHeroImage] = useState<string>('');
   const [heroImgError, setHeroImgError] = useState(false);
+
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [failedSuggestionImgs, setFailedSuggestionImgs] = useState<Record<string, boolean>>({});
+  const searchBoxRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (searchBoxRef.current && !searchBoxRef.current.contains(event.target as Node)) {
+        setSearchFocused(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   useEffect(() => {
     const unsubHero = onSnapshot(
@@ -112,6 +127,32 @@ export function HomePage() {
     });
   }, [items, searchTerm, selectedPlatform]);
 
+  const searchSuggestions = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return [];
+
+    const matched = items.filter((item) => {
+      return (
+        item.name.toLowerCase().includes(term) ||
+        item.tagline.toLowerCase().includes(term) ||
+        item.platform.toLowerCase().includes(term) ||
+        item.fileType.toLowerCase().includes(term) ||
+        (item.slug && item.slug.toLowerCase().includes(term))
+      );
+    });
+
+    matched.sort((a, b) => {
+      const aName = a.name.toLowerCase();
+      const bName = b.name.toLowerCase();
+      const aRank = aName.startsWith(term) ? 0 : aName.includes(term) ? 1 : 2;
+      const bRank = bName.startsWith(term) ? 0 : bName.includes(term) ? 1 : 2;
+      if (aRank !== bRank) return aRank - bRank;
+      return (b.downloadsCount || 0) - (a.downloadsCount || 0);
+    });
+
+    return matched.slice(0, 6);
+  }, [items, searchTerm]);
+
   const platformLabel = (p: 'All' | SoftwarePlatform) => {
     switch (p) {
       case 'All':
@@ -136,6 +177,7 @@ export function HomePage() {
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setSearchFocused(false);
     document.getElementById('catalog')?.scrollIntoView({ behavior: 'smooth' });
   };
 
@@ -149,7 +191,7 @@ export function HomePage() {
     <main className="w-full">
       {/* Hero Section (Auto seamless pattern with zero blur by default, or subtle-blurred custom banner when set in Admin) */}
       <section
-        className={`relative w-full overflow-hidden transition-colors duration-200 ${
+        className={`relative z-30 w-full transition-colors duration-200 ${
           hasCustomBanner
             ? 'bg-[#061316] text-white border-b border-slate-800/80'
             : 'bg-transparent text-[#062326] dark:text-white'
@@ -157,7 +199,7 @@ export function HomePage() {
       >
         {/* Full-Width Custom Background Image with subtle light blur (only when uploaded/set in Admin Panel) */}
         {hasCustomBanner && (
-          <>
+          <div className="absolute inset-0 overflow-hidden pointer-events-none">
             <img
               src={heroImage}
               alt="Toolpotro verified software distribution"
@@ -173,7 +215,7 @@ export function HomePage() {
               aria-hidden="true"
               className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(16,185,129,0.12)_0%,transparent_70%)]"
             />
-          </>
+          </div>
         )}
 
         {/* Centered Hero Content */}
@@ -232,49 +274,133 @@ export function HomePage() {
             {t.hero.subtitle}
           </p>
 
-          {/* Unified Search + Browse Catalog CTA */}
-          <form onSubmit={handleSearchSubmit} className="w-full max-w-2xl pt-0.5">
-            <div
-              className={`w-full rounded-2xl border p-1 sm:p-1.5 flex flex-row items-center gap-1.5 sm:gap-2 shadow-xl ${
-                hasCustomBanner
-                  ? 'border-white/15 bg-slate-900/75 backdrop-blur-md shadow-2xl'
-                  : 'border-teal-900/15 bg-[#f2faf8] shadow-teal-950/10 dark:border-teal-500/20 dark:bg-[#081a1f] dark:shadow-black/40'
-              }`}
-            >
-              <div className="relative flex-1 min-w-0 flex items-center">
-                <Search
-                  className={`w-4 h-4 absolute left-3 sm:left-3.5 top-1/2 -translate-y-1/2 pointer-events-none ${
-                    hasCustomBanner
-                      ? 'text-slate-400'
-                      : 'text-[#356368] dark:text-slate-400'
-                  }`}
-                />
-                <input
-                  type="search"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder={t.hero.searchPlaceholder}
-                  className={`w-full h-10 pl-9 sm:pl-10 pr-2 sm:pr-4 bg-transparent text-sm focus:outline-none ${
-                    hasCustomBanner
-                      ? 'text-white placeholder:text-slate-400'
-                      : 'text-[#062326] placeholder:text-[#4c767a] dark:text-white dark:placeholder:text-slate-400'
-                  }`}
-                />
-              </div>
-              <a
-                href="#catalog"
-                aria-label={t.hero.exploreCta}
-                className={`h-10 min-w-[44px] px-3.5 sm:px-5 rounded-xl text-sm font-bold inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0 ${
+          {/* Unified Search + Browse Catalog CTA + Floating Live Suggestions Dropdown */}
+          <div ref={searchBoxRef} className="relative z-40 w-full max-w-2xl pt-0.5">
+            <form onSubmit={handleSearchSubmit} className="w-full">
+              <div
+                className={`w-full rounded-2xl border p-1 sm:p-1.5 flex flex-row items-center gap-1.5 sm:gap-2 shadow-xl ${
                   hasCustomBanner
-                    ? 'bg-[#10d9a0] hover:bg-[#0ec28f] text-slate-950'
-                    : 'bg-[#0d9488] hover:bg-[#0f766e] text-white dark:bg-[#10d9a0] dark:hover:bg-[#0ec28f] dark:text-slate-950'
+                    ? 'border-white/15 bg-slate-900/75 backdrop-blur-md shadow-2xl'
+                    : 'border-teal-900/15 bg-[#f2faf8] shadow-teal-950/10 dark:border-teal-500/20 dark:bg-[#081a1f] dark:shadow-black/40'
                 }`}
               >
-                <span className="hidden sm:inline">{t.hero.exploreCta}</span>
-                <ArrowRight className="w-4 h-4 shrink-0" />
-              </a>
-            </div>
-          </form>
+                <div className="relative flex-1 min-w-0 flex items-center">
+                  <Search
+                    className={`w-4 h-4 absolute left-3 sm:left-3.5 top-1/2 -translate-y-1/2 pointer-events-none ${
+                      hasCustomBanner
+                        ? 'text-slate-400'
+                        : 'text-[#356368] dark:text-slate-400'
+                    }`}
+                  />
+                  <input
+                    type="search"
+                    value={searchTerm}
+                    onFocus={() => setSearchFocused(true)}
+                    onChange={(e) => {
+                      setSearchTerm(e.target.value);
+                      setSearchFocused(true);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') {
+                        setSearchFocused(false);
+                      }
+                    }}
+                    placeholder={t.hero.searchPlaceholder}
+                    aria-expanded={searchFocused && searchTerm.trim().length > 0}
+                    aria-autocomplete="list"
+                    className={`w-full h-10 pl-9 sm:pl-10 pr-2 sm:pr-4 bg-transparent text-sm focus:outline-none ${
+                      hasCustomBanner
+                        ? 'text-white placeholder:text-slate-400'
+                        : 'text-[#062326] placeholder:text-[#4c767a] dark:text-white dark:placeholder:text-slate-400'
+                    }`}
+                  />
+                </div>
+                <a
+                  href="#catalog"
+                  onClick={() => setSearchFocused(false)}
+                  aria-label={t.hero.exploreCta}
+                  className={`h-10 min-w-[44px] px-3.5 sm:px-5 rounded-xl text-sm font-bold inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0 ${
+                    hasCustomBanner
+                      ? 'bg-[#10d9a0] hover:bg-[#0ec28f] text-slate-950'
+                      : 'bg-[#0d9488] hover:bg-[#0f766e] text-white dark:bg-[#10d9a0] dark:hover:bg-[#0ec28f] dark:text-slate-950'
+                  }`}
+                >
+                  <span className="hidden sm:inline">{t.hero.exploreCta}</span>
+                  <ArrowRight className="w-4 h-4 shrink-0" />
+                </a>
+              </div>
+            </form>
+
+            {searchFocused && searchTerm.trim().length > 0 && (
+              <div
+                role="listbox"
+                className="absolute left-0 right-0 top-full mt-2 z-50 rounded-2xl border border-teal-900/15 bg-[#f4fbf9] shadow-2xl shadow-teal-950/20 dark:border-teal-500/25 dark:bg-[#081d22] dark:shadow-black/75 overflow-hidden text-left"
+              >
+                {searchSuggestions.length === 0 ? (
+                  <div className="px-4 py-3.5 text-sm text-[#2c595d] dark:text-teal-200/75 text-center">
+                    {t.catalog.noSearchResults}
+                  </div>
+                ) : (
+                  <div className="max-h-72 overflow-y-auto divide-y divide-teal-900/10 dark:divide-teal-500/15">
+                    {searchSuggestions.map((item) => {
+                      const imgBroken = Boolean(failedSuggestionImgs[item.id]);
+                      return (
+                        <Link
+                          key={item.id}
+                          to={`/software/${item.id}`}
+                          role="option"
+                          onClick={() => setSearchFocused(false)}
+                          className="group flex items-center gap-3 sm:gap-3.5 px-3.5 sm:px-4 py-2.5 sm:py-3 hover:bg-[#e4f5f0] dark:hover:bg-[#0d2830] transition-colors"
+                        >
+                          <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-[#dff0ec] dark:bg-[#0d262d] border border-teal-900/10 dark:border-teal-500/20 overflow-hidden shrink-0 flex items-center justify-center">
+                            {item.thumbnailUrl && !imgBroken ? (
+                              <img
+                                src={item.thumbnailUrl}
+                                alt={item.name}
+                                referrerPolicy="no-referrer"
+                                onError={() =>
+                                  setFailedSuggestionImgs((prev) => ({
+                                    ...prev,
+                                    [item.id]: true,
+                                  }))
+                                }
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <Package className="w-5 h-5 text-teal-700/70 dark:text-teal-300/70 stroke-[1.5]" />
+                            )}
+                          </div>
+
+                          <div className="min-w-0 flex-1 space-y-0.5">
+                            <p className="font-display text-sm sm:text-[15px] font-semibold text-[#062326] dark:text-white group-hover:text-[#0d9488] dark:group-hover:text-[#2ee6b8] transition-colors truncate">
+                              {item.name}
+                            </p>
+                            <div className="flex items-center gap-1.5 text-[11px] sm:text-xs font-mono text-[#2c595d] dark:text-teal-200/70 whitespace-nowrap overflow-hidden">
+                              <span>{item.platform}</span>
+                              <span aria-hidden="true">·</span>
+                              <span>{item.fileType}</span>
+                              <span aria-hidden="true">·</span>
+                              <span className="truncate">{item.version}</span>
+                            </div>
+                          </div>
+
+                          <span
+                            className={`font-mono text-xs font-semibold tabular-nums px-2 py-0.5 rounded-md shrink-0 ${
+                              item.price > 0
+                                ? 'bg-sky-600/15 text-sky-800 dark:bg-sky-400/15 dark:text-sky-300'
+                                : 'bg-teal-600/15 text-teal-800 dark:bg-[#10d9a0]/15 dark:text-[#2ee6b8]'
+                            }`}
+                          >
+                            {item.price > 0 ? `$${item.price}` : t.catalog.freeLabel}
+                          </span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* Popular Platforms Quick Links */}
           <div className="flex flex-wrap items-center justify-center gap-2">

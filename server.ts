@@ -264,9 +264,42 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.resolve(__dirname, 'dist');
-    app.use(express.static(distPath, { maxAge: '1d' }));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+    const indexHtmlPath = path.join(distPath, 'index.html');
+    const cachedHtml = fs.existsSync(indexHtmlPath)
+      ? fs.readFileSync(indexHtmlPath, 'utf-8')
+      : '';
+
+    app.use(express.static(distPath, { maxAge: '1d', index: false }));
+    app.get('*', (req, res) => {
+      if (!cachedHtml) {
+        return res.sendFile(indexHtmlPath);
+      }
+      const forwardedProto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https')
+        .split(',')[0]
+        .trim();
+      const host = String(req.headers['x-forwarded-host'] || req.get('host') || '')
+        .split(',')[0]
+        .trim();
+      const envUrl = process.env.APP_URL ? process.env.APP_URL.replace(/\/+$/, '') : '';
+      const origin = envUrl || (host ? `${forwardedProto}://${host}` : '');
+
+      if (!origin) {
+        return res.type('html').send(cachedHtml);
+      }
+
+      const safePath = (req.originalUrl || '/').replace(/["<>]/g, '');
+      const pageUrl = `${origin}${safePath}`;
+      const ogImageUrl = `${origin}/og-preview.png`;
+
+      const html = cachedHtml
+        .replace(/content="\/og-preview\.png"/g, `content="${ogImageUrl}"`)
+        .replace(/"image": "\/og-preview\.png"/g, `"image": "${ogImageUrl}"`)
+        .replace(
+          '</head>',
+          `  <meta property="og:url" content="${pageUrl}" />\n    <link rel="canonical" href="${pageUrl}" />\n  </head>`
+        );
+
+      return res.set('Cache-Control', 'no-cache').type('html').send(html);
     });
   }
 
