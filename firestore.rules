@@ -13,6 +13,10 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidLicenseKey(key) {
+      return key is string && key.size() >= 8 && key.size() <= 64 && key.matches('^[A-Z0-9\\-]+$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -48,8 +52,9 @@ service cloud.firestore {
       data.keys().hasOnly([
         'name', 'slug', 'tagline', 'description', 'category', 'platform',
         'fileType', 'version', 'fileSize', 'downloadUrl', 'thumbnailUrl',
-        'screenshots', 'installGuide', 'price', 'downloadsCount', 'status',
-        'featured', 'createdAt', 'updatedAt'
+        'screenshots', 'installGuide', 'price', 'pricingMode', 'currency',
+        'plans', 'generateLicenseKey', 'gracePeriodHours', 'maxDevices',
+        'downloadsCount', 'status', 'featured', 'createdAt', 'updatedAt'
       ]) &&
       data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
       data.slug is string && data.slug.size() >= 1 && data.slug.size() <= 120 && data.slug.matches('^[a-zA-Z0-9_\\-]+$') &&
@@ -64,7 +69,21 @@ service cloud.firestore {
       (!('thumbnailUrl' in data) || (data.thumbnailUrl is string && data.thumbnailUrl.size() <= 1000)) &&
       (!('screenshots' in data) || (data.screenshots is list && data.screenshots.size() <= 10 && (data.screenshots.size() == 0 || data.screenshots[0] is string))) &&
       (!('installGuide' in data) || (data.installGuide is string && data.installGuide.size() <= 4000)) &&
-      (data.price is int || data.price is float) && data.price >= 0 && data.price <= 100000 &&
+      (data.price is int || data.price is float) && data.price >= 0 && data.price <= 1000000 &&
+      (!('pricingMode' in data) || data.pricingMode in ['free', 'paid_download', 'freemium_license']) &&
+      (!('currency' in data) || data.currency in ['USD', 'BDT']) &&
+      (!('plans' in data) || (
+        data.plans is list &&
+        data.plans.size() <= 8 &&
+        (data.plans.size() == 0 || (
+          data.plans[0] is map &&
+          data.plans[0].name is string && data.plans[0].name.size() >= 1 && data.plans[0].name.size() <= 80 &&
+          (data.plans[0].price is int || data.plans[0].price is float) && data.plans[0].price >= 0 && data.plans[0].price <= 1000000
+        ))
+      )) &&
+      (!('generateLicenseKey' in data) || data.generateLicenseKey is bool) &&
+      (!('gracePeriodHours' in data) || ((data.gracePeriodHours is int || data.gracePeriodHours is float) && data.gracePeriodHours >= 0 && data.gracePeriodHours <= 168)) &&
+      (!('maxDevices' in data) || (data.maxDevices is int && data.maxDevices >= 1 && data.maxDevices <= 50)) &&
       data.downloadsCount is int && data.downloadsCount >= 0 &&
       data.status in ['active', 'archived'] &&
       data.featured is bool &&
@@ -111,12 +130,114 @@ service cloud.firestore {
       data.createdAt is timestamp;
     }
 
+    function isValidOrder(data) {
+      return data.keys().hasAll([
+        'orderId', 'softwareId', 'softwareName', 'currency', 'amount',
+        'paymentMethod', 'customerName', 'customerEmail', 'senderPhone',
+        'trxId', 'status', 'graceUntilMs', 'expiresAtMs', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'orderId', 'softwareId', 'softwareName', 'planId', 'planName', 'durationDays',
+        'currency', 'amount', 'couponCode', 'paymentMethod', 'customerName',
+        'customerEmail', 'senderPhone', 'trxId', 'licenseKey', 'status',
+        'graceUntilMs', 'expiresAtMs', 'notes', 'createdAt', 'updatedAt'
+      ]) &&
+      isValidId(data.orderId) &&
+      isValidId(data.softwareId) &&
+      data.softwareName is string && data.softwareName.size() >= 1 && data.softwareName.size() <= 120 &&
+      (!('planId' in data) || (data.planId is string && data.planId.size() <= 80)) &&
+      (!('planName' in data) || (data.planName is string && data.planName.size() <= 80)) &&
+      (!('durationDays' in data) || (data.durationDays is int && data.durationDays >= 0 && data.durationDays <= 36500)) &&
+      data.currency in ['USD', 'BDT'] &&
+      (data.amount is int || data.amount is float) && data.amount >= 0 && data.amount <= 1000000 &&
+      (!('couponCode' in data) || (data.couponCode is string && data.couponCode.size() <= 40)) &&
+      data.paymentMethod in ['bkash', 'nagad', 'free'] &&
+      data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 100 &&
+      data.customerEmail is string && data.customerEmail.size() >= 3 && data.customerEmail.size() <= 200 &&
+      data.senderPhone is string && data.senderPhone.size() >= 4 && data.senderPhone.size() <= 30 &&
+      data.trxId is string && data.trxId.size() >= 2 && data.trxId.size() <= 60 &&
+      (!('licenseKey' in data) || (data.licenseKey is string && data.licenseKey.size() <= 64)) &&
+      data.status in ['provisional', 'verified', 'payment_required', 'revoked'] &&
+      data.graceUntilMs is int && data.graceUntilMs >= 0 &&
+      data.expiresAtMs is int && data.expiresAtMs >= 0 &&
+      (!('notes' in data) || (data.notes is string && data.notes.size() <= 500)) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidLicense(data) {
+      return data.keys().hasAll([
+        'licenseKey', 'orderId', 'softwareId', 'softwareName', 'currency',
+        'amount', 'trxId', 'status', 'graceUntilMs', 'expiresAtMs',
+        'maxDevices', 'boundDevices', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'licenseKey', 'orderId', 'softwareId', 'softwareName', 'planId', 'planName',
+        'durationDays', 'currency', 'amount', 'trxId', 'status', 'graceUntilMs',
+        'expiresAtMs', 'maxDevices', 'boundDevices', 'resubmittedTrxId',
+        'resubmittedPhone', 'resubmittedAtMs', 'createdAt', 'updatedAt'
+      ]) &&
+      isValidLicenseKey(data.licenseKey) &&
+      isValidId(data.orderId) &&
+      isValidId(data.softwareId) &&
+      data.softwareName is string && data.softwareName.size() >= 1 && data.softwareName.size() <= 120 &&
+      (!('planId' in data) || (data.planId is string && data.planId.size() <= 80)) &&
+      (!('planName' in data) || (data.planName is string && data.planName.size() <= 80)) &&
+      (!('durationDays' in data) || (data.durationDays is int && data.durationDays >= 0 && data.durationDays <= 36500)) &&
+      data.currency in ['USD', 'BDT'] &&
+      (data.amount is int || data.amount is float) && data.amount >= 0 && data.amount <= 1000000 &&
+      data.trxId is string && data.trxId.size() >= 2 && data.trxId.size() <= 60 &&
+      data.status in ['provisional', 'verified', 'payment_required', 'revoked'] &&
+      data.graceUntilMs is int && data.graceUntilMs >= 0 &&
+      data.expiresAtMs is int && data.expiresAtMs >= 0 &&
+      data.maxDevices is int && data.maxDevices >= 1 && data.maxDevices <= 50 &&
+      data.boundDevices is list && data.boundDevices.size() <= 50 &&
+      (data.boundDevices.size() == 0 || data.boundDevices[0] is string) &&
+      (!('resubmittedTrxId' in data) || (data.resubmittedTrxId is string && data.resubmittedTrxId.size() <= 60)) &&
+      (!('resubmittedPhone' in data) || (data.resubmittedPhone is string && data.resubmittedPhone.size() <= 30)) &&
+      (!('resubmittedAtMs' in data) || (data.resubmittedAtMs is int && data.resubmittedAtMs >= 0)) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidSmsTransaction(data) {
+      return data.keys().hasAll([
+        'trxId', 'provider', 'amount', 'receivedAtMs', 'status', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'trxId', 'provider', 'sender', 'amount', 'senderPhone', 'rawMessage',
+        'receivedAtMs', 'matchedOrderId', 'matchedLicenseKey', 'status', 'createdAt', 'updatedAt'
+      ]) &&
+      data.trxId is string && data.trxId.size() >= 2 && data.trxId.size() <= 60 &&
+      data.provider in ['bkash', 'nagad'] &&
+      (!('sender' in data) || (data.sender is string && data.sender.size() <= 40)) &&
+      (data.amount is int || data.amount is float) && data.amount >= 0 && data.amount <= 1000000 &&
+      (!('senderPhone' in data) || (data.senderPhone is string && data.senderPhone.size() <= 40)) &&
+      (!('rawMessage' in data) || (data.rawMessage is string && data.rawMessage.size() <= 1000)) &&
+      data.receivedAtMs is int && data.receivedAtMs >= 0 &&
+      (!('matchedOrderId' in data) || (data.matchedOrderId is string && data.matchedOrderId.size() <= 128)) &&
+      (!('matchedLicenseKey' in data) || (data.matchedLicenseKey is string && data.matchedLicenseKey.size() <= 64)) &&
+      data.status in ['unused', 'matched', 'ignored'] &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
     function isValidSettings(data) {
-      return data.keys().hasOnly(['heroImageUrl', 'contactEmail', 'facebookUrl', 'redirects', 'updatedAt']) &&
+      return data.keys().hasOnly([
+        'heroImageUrl', 'contactEmail', 'facebookUrl', 'redirects',
+        'bkashNumber', 'nagadNumber', 'bkashEnabled', 'nagadEnabled',
+        'paymentNote', 'defaultGraceHours', 'updatedAt'
+      ]) &&
         (!('heroImageUrl' in data) || (data.heroImageUrl is string && data.heroImageUrl.size() <= 1000)) &&
         (!('contactEmail' in data) || (data.contactEmail is string && data.contactEmail.size() <= 200)) &&
         (!('facebookUrl' in data) || (data.facebookUrl is string && data.facebookUrl.size() <= 1000)) &&
         (!('redirects' in data) || data.redirects is map) &&
+        (!('bkashNumber' in data) || (data.bkashNumber is string && data.bkashNumber.size() <= 30)) &&
+        (!('nagadNumber' in data) || (data.nagadNumber is string && data.nagadNumber.size() <= 30)) &&
+        (!('bkashEnabled' in data) || data.bkashEnabled is bool) &&
+        (!('nagadEnabled' in data) || data.nagadEnabled is bool) &&
+        (!('paymentNote' in data) || (data.paymentNote is string && data.paymentNote.size() <= 400)) &&
+        (!('defaultGraceHours' in data) || ((data.defaultGraceHours is int || data.defaultGraceHours is float) && data.defaultGraceHours >= 0 && data.defaultGraceHours <= 168)) &&
         (!('updatedAt' in data) || data.updatedAt is timestamp);
     }
 
@@ -182,6 +303,80 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/software/$(incoming().softwareId));
       allow update: if false;
       allow delete: if isAdmin() && isValidId(eventId);
+    }
+
+    match /orders/{orderId} {
+      allow get, list: if isAdmin();
+      allow create: if isValidId(orderId) &&
+        isValidOrder(incoming()) &&
+        incoming().orderId == orderId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/software/$(incoming().softwareId)) && (
+          isAdmin() ||
+          incoming().status == 'provisional'
+        );
+      allow update: if isAdmin() &&
+        isValidId(orderId) &&
+        isValidOrder(incoming()) &&
+        incoming().orderId == existing().orderId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(orderId);
+    }
+
+    match /licenses/{licenseKey} {
+      allow get: if isValidLicenseKey(licenseKey);
+      allow list: if isAdmin();
+      allow create: if isValidLicenseKey(licenseKey) &&
+        isValidLicense(incoming()) &&
+        incoming().licenseKey == licenseKey &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/software/$(incoming().softwareId)) && (
+          isAdmin() ||
+          (
+            incoming().status == 'provisional' &&
+            incoming().boundDevices.size() == 0 &&
+            existsAfter(/databases/$(database)/documents/orders/$(incoming().orderId))
+          )
+        );
+      allow update: if isValidLicenseKey(licenseKey) &&
+        isValidLicense(incoming()) &&
+        incoming().licenseKey == existing().licenseKey &&
+        incoming().orderId == existing().orderId &&
+        incoming().softwareId == existing().softwareId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (
+            existing().status in ['payment_required', 'provisional'] &&
+            incoming().status == existing().status &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['resubmittedTrxId', 'resubmittedPhone', 'resubmittedAtMs', 'updatedAt'])
+          ) ||
+          (
+            existing().status in ['provisional', 'verified'] &&
+            incoming().status == existing().status &&
+            incoming().boundDevices.size() <= existing().maxDevices &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['boundDevices', 'updatedAt'])
+          )
+        );
+      allow delete: if isAdmin() && isValidLicenseKey(licenseKey);
+    }
+
+    match /smsTransactions/{trxId} {
+      allow get, list: if isAdmin();
+      allow create: if isAdmin() &&
+        isValidId(trxId) &&
+        isValidSmsTransaction(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isAdmin() &&
+        isValidId(trxId) &&
+        isValidSmsTransaction(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(trxId);
     }
 
     match /admins/{adminId} {

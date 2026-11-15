@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   collection,
   doc,
@@ -13,14 +13,19 @@ import {
   where,
   increment,
   limit,
+  writeBatch,
 } from 'firebase/firestore';
 import {
   ArrowLeft,
+  Check,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Copy,
+  CreditCard,
   Download,
   HardDrive,
+  KeyRound,
   Laptop,
   Calendar,
   Tag,
@@ -29,13 +34,29 @@ import {
   Share2,
   X,
   Maximize2,
+  Clock,
+  Sparkles,
 } from 'lucide-react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useApp } from '../context/AppContext';
-import type { CouponCode, SoftwareItem } from '../types';
+import type {
+  CouponCode,
+  PaymentDisplaySettings,
+  PaymentMethod,
+  SoftwareItem,
+  SubscriptionPlan,
+} from '../types';
+
+function generateLicenseKeyCode(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const seg = () =>
+    Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  return `TP-${seg()}-${seg()}-${seg()}`;
+}
 
 export function SoftwareDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { t } = useApp();
 
@@ -54,6 +75,36 @@ export function SoftwareDetailPage() {
   const [downloading, setDownloading] = useState(false);
   const [downloadSuccess, setDownloadSuccess] = useState(false);
   const [copiedShare, setCopiedShare] = useState(false);
+
+  // Payment Settings & Subscription Plans State
+  const [paymentSettings, setPaymentSettings] = useState<PaymentDisplaySettings>({
+    bkashNumber: '',
+    nagadNumber: '',
+    bkashEnabled: true,
+    nagadEnabled: true,
+    paymentNote: '',
+    defaultGraceHours: 2,
+  });
+  const [selectedPlanId, setSelectedPlanId] = useState<string>('');
+  const [showCheckoutModal, setShowCheckoutModal] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('bkash');
+  const [customerName, setCustomerName] = useState('');
+  const [customerEmail, setCustomerEmail] = useState('');
+  const [senderPhone, setSenderPhone] = useState('');
+  const [trxId, setTrxId] = useState('');
+  const [checkoutSubmitting, setCheckoutSubmitting] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [copiedPayNum, setCopiedPayNum] = useState(false);
+  const [copiedKey, setCopiedKey] = useState(false);
+  const [orderResult, setOrderResult] = useState<{
+    orderId: string;
+    licenseKey: string;
+    status: 'verified' | 'provisional';
+    planName: string;
+    amount: number;
+    currency: 'BDT' | 'USD';
+    graceUntilMs: number;
+  } | null>(null);
 
   // Screenshots Lightbox State
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
@@ -128,6 +179,53 @@ export function SoftwareDetailPage() {
     return () => unsubscribe();
   }, [id]);
 
+  // Fetch admin payment display settings (bKash / Nagad personal numbers)
+  useEffect(() => {
+    const unsub = onSnapshot(
+      doc(db, 'settings', 'payment'),
+      (snap) => {
+        if (snap.exists()) {
+          const d = snap.data();
+          setPaymentSettings({
+            bkashNumber: typeof d?.bkashNumber === 'string' ? d.bkashNumber.trim() : '',
+            nagadNumber: typeof d?.nagadNumber === 'string' ? d.nagadNumber.trim() : '',
+            bkashEnabled: d?.bkashEnabled !== false,
+            nagadEnabled: d?.nagadEnabled !== false,
+            paymentNote: typeof d?.paymentNote === 'string' ? d.paymentNote.trim() : '',
+            defaultGraceHours: Number(d?.defaultGraceHours ?? 2),
+          });
+        }
+      },
+      () => {}
+    );
+    return () => unsub();
+  }, []);
+
+  // Initialize selected plan and support ?buy=license deep link
+  useEffect(() => {
+    if (!item) return;
+    if (item.plans && item.plans.length > 0 && !item.plans.some((p) => p.id === selectedPlanId)) {
+      setSelectedPlanId(item.plans[0].id);
+    }
+    if (searchParams.get('buy') === 'license') {
+      const mode =
+        item.pricingMode ||
+        (item.price > 0 || (item.plans?.length ?? 0) > 0 ? 'paid_download' : 'free');
+      if (mode !== 'free') {
+        setShowCheckoutModal(true);
+      }
+    }
+  }, [item, searchParams, selectedPlanId]);
+
+  // Keep payment method synced to enabled providers
+  useEffect(() => {
+    if (!paymentSettings.bkashEnabled && paymentSettings.nagadEnabled) {
+      setPaymentMethod('nagad');
+    } else if (paymentSettings.bkashEnabled && !paymentSettings.nagadEnabled) {
+      setPaymentMethod('bkash');
+    }
+  }, [paymentSettings.bkashEnabled, paymentSettings.nagadEnabled]);
+
   const galleryImages = useMemo(() => {
     if (!item) return [];
     if (item.screenshots && item.screenshots.length > 0) {
@@ -158,14 +256,36 @@ export function SoftwareDetailPage() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [lightboxIndex, galleryImages.length]);
 
+  const pricingMode = useMemo(() => {
+    if (!item) return 'free';
+    return (
+      item.pricingMode ||
+      (item.price > 0 || (item.plans && item.plans.length > 0) ? 'paid_download' : 'free')
+    );
+  }, [item]);
+
+  const currencySymbol = item?.currency === 'BDT' ? '৳' : '$';
+  const currencyCode = item?.currency === 'BDT' ? 'BDT' : 'USD';
+
+  const selectedPlan: SubscriptionPlan | null = useMemo(() => {
+    if (!item?.plans || item.plans.length === 0) return null;
+    return item.plans.find((p) => p.id === selectedPlanId) || item.plans[0];
+  }, [item?.plans, selectedPlanId]);
+
+  const basePrice = useMemo(() => {
+    if (!item) return 0;
+    if (selectedPlan) return Number(selectedPlan.price) || 0;
+    return Number(item.price) || 0;
+  }, [item, selectedPlan]);
+
   const finalPrice = useMemo(() => {
     if (!item) return 0;
-    if (!appliedCoupon || item.price <= 0) return item.price;
+    if (!appliedCoupon || basePrice <= 0) return basePrice;
     if (appliedCoupon.discountType === 'percentage') {
-      return Math.max(0, Number((item.price * (1 - appliedCoupon.discountValue / 100)).toFixed(2)));
+      return Math.max(0, Number((basePrice * (1 - appliedCoupon.discountValue / 100)).toFixed(2)));
     }
-    return Math.max(0, Number((item.price - appliedCoupon.discountValue).toFixed(2)));
-  }, [item, appliedCoupon]);
+    return Math.max(0, Number((basePrice - appliedCoupon.discountValue).toFixed(2)));
+  }, [item, basePrice, appliedCoupon]);
 
   const formattedDate = useMemo(() => {
     if (!item?.updatedAt) return '—';
@@ -238,6 +358,18 @@ export function SoftwareDetailPage() {
     }
   };
 
+  const triggerFileDownload = () => {
+    if (!item) return;
+    const anchor = document.createElement('a');
+    anchor.href = item.downloadUrl;
+    anchor.target = '_blank';
+    anchor.rel = 'noopener noreferrer';
+    anchor.download = `${item.slug}-${item.version}${item.fileType === 'Store Link' ? '' : item.fileType}`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+  };
+
   const handleDirectDownload = async () => {
     if (!item || downloading) return;
     setDownloading(true);
@@ -255,31 +387,184 @@ export function SoftwareDetailPage() {
         softwareName: item.name,
         platform: item.platform,
         ...(appliedCoupon ? { couponCode: appliedCoupon.code } : {}),
-        finalPrice,
+        finalPrice: pricingMode === 'freemium_license' ? 0 : finalPrice,
         createdAt: serverTimestamp(),
       });
 
-      if (appliedCoupon) {
+      if (appliedCoupon && pricingMode !== 'freemium_license') {
         await updateDoc(doc(db, 'coupons', appliedCoupon.id), {
           usedCount: increment(1),
           updatedAt: serverTimestamp(),
         });
       }
 
-      const anchor = document.createElement('a');
-      anchor.href = item.downloadUrl;
-      anchor.target = '_blank';
-      anchor.rel = 'noopener noreferrer';
-      anchor.download = `${item.slug}-${item.version}${item.fileType === 'Store Link' ? '' : item.fileType}`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      document.body.removeChild(anchor);
-
+      triggerFileDownload();
       setDownloadSuccess(true);
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `software/${item.id}`);
     } finally {
       setDownloading(false);
+    }
+  };
+
+  const openCheckoutModal = (planId?: string) => {
+    if (planId) setSelectedPlanId(planId);
+    setOrderResult(null);
+    setCheckoutError(null);
+    setShowCheckoutModal(true);
+  };
+
+  const handleCheckoutSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!item || checkoutSubmitting) return;
+
+    const cleanName = customerName.trim();
+    const cleanEmail = customerEmail.trim();
+    const cleanPhone = senderPhone.trim();
+    const cleanTrx = trxId.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+
+    if (cleanName.length < 1 || cleanEmail.length < 3 || !cleanEmail.includes('@')) {
+      setCheckoutError('Please enter a valid Name and Email / Gmail address.');
+      return;
+    }
+    if (cleanPhone.length < 4) {
+      setCheckoutError('Please enter your sender bKash or Nagad phone number.');
+      return;
+    }
+    if (cleanTrx.length < 4) {
+      setCheckoutError('Please enter a valid Transaction ID (TrxID).');
+      return;
+    }
+
+    setCheckoutSubmitting(true);
+    setCheckoutError(null);
+
+    const nowMs = Date.now();
+    const orderId = `ord_${nowMs}_${Math.random().toString(36).slice(2, 8)}`;
+    const licenseKey = generateLicenseKeyCode();
+    const graceHours =
+      typeof item.gracePeriodHours === 'number' && item.gracePeriodHours >= 0
+        ? item.gracePeriodHours
+        : paymentSettings.defaultGraceHours || 2;
+    const graceUntilMs = Math.floor(nowMs + graceHours * 3600 * 1000);
+    const durationDays = selectedPlan ? Math.max(0, Math.floor(selectedPlan.durationDays)) : 365;
+    const expiresAtMs = durationDays > 0 ? Math.floor(nowMs + durationDays * 86400 * 1000) : 0;
+    const maxDevices = Math.max(1, Math.min(50, Math.floor(item.maxDevices || 1)));
+    const planName = selectedPlan?.name || 'Standard License';
+    const planId = selectedPlan?.id || 'standard';
+
+    try {
+      const batch = writeBatch(db);
+
+      batch.set(doc(db, 'orders', orderId), {
+        orderId,
+        softwareId: item.id,
+        softwareName: item.name,
+        planId,
+        planName,
+        durationDays,
+        currency: currencyCode,
+        amount: finalPrice,
+        ...(appliedCoupon ? { couponCode: appliedCoupon.code } : {}),
+        paymentMethod,
+        customerName: cleanName.slice(0, 100),
+        customerEmail: cleanEmail.slice(0, 200),
+        senderPhone: cleanPhone.slice(0, 30),
+        trxId: cleanTrx.slice(0, 60),
+        licenseKey,
+        status: 'provisional',
+        graceUntilMs,
+        expiresAtMs,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      batch.set(doc(db, 'licenses', licenseKey), {
+        licenseKey,
+        orderId,
+        softwareId: item.id,
+        softwareName: item.name,
+        planId,
+        planName,
+        durationDays,
+        currency: currencyCode,
+        amount: finalPrice,
+        trxId: cleanTrx.slice(0, 60),
+        status: 'provisional',
+        graceUntilMs,
+        expiresAtMs,
+        maxDevices,
+        boundDevices: [],
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      if (pricingMode === 'paid_download') {
+        const eventId = `evt_${nowMs}_${Math.random().toString(36).slice(2, 8)}`;
+        batch.update(doc(db, 'software', item.id), {
+          downloadsCount: increment(1),
+          updatedAt: serverTimestamp(),
+        });
+        batch.set(doc(db, 'downloadEvents', eventId), {
+          softwareId: item.id,
+          softwareName: item.name,
+          platform: item.platform,
+          ...(appliedCoupon ? { couponCode: appliedCoupon.code } : {}),
+          finalPrice,
+          createdAt: serverTimestamp(),
+        });
+      }
+
+      if (appliedCoupon) {
+        batch.update(doc(db, 'coupons', appliedCoupon.id), {
+          usedCount: increment(1),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      await batch.commit();
+
+      // Check instant SMS match against server PaySync inbox
+      let effectiveStatus: 'verified' | 'provisional' = 'provisional';
+      try {
+        const matchResp = await fetch('/api/payments/match-trx', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            trxId: cleanTrx,
+            licenseKey,
+            orderId,
+            amount: finalPrice,
+          }),
+        });
+        if (matchResp.ok) {
+          const matchData = (await matchResp.json()) as { matched?: boolean };
+          if (matchData.matched) {
+            effectiveStatus = 'verified';
+          }
+        }
+      } catch {
+        // Ignore network failure; provisional grace access remains active
+      }
+
+      setOrderResult({
+        orderId,
+        licenseKey,
+        status: effectiveStatus,
+        planName,
+        amount: finalPrice,
+        currency: currencyCode,
+        graceUntilMs,
+      });
+
+      if (pricingMode === 'paid_download') {
+        triggerFileDownload();
+        setDownloadSuccess(true);
+      }
+    } catch (err) {
+      setCheckoutError(err instanceof Error ? err.message : 'Checkout failed. Please try again.');
+    } finally {
+      setCheckoutSubmitting(false);
     }
   };
 
@@ -401,21 +686,77 @@ export function SoftwareDetailPage() {
 
             {/* Primary CTA Row */}
             <div className="flex flex-wrap items-center justify-center md:justify-start gap-3 pt-1">
-              <button
-                type="button"
-                onClick={handleDirectDownload}
-                disabled={downloading}
-                className="h-11 px-7 rounded-xl bg-[#0d9488] hover:bg-[#0f766e] text-white dark:bg-[#10d9a0] dark:hover:bg-[#0ec28f] dark:text-slate-950 font-bold text-sm inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer min-w-[200px]"
-              >
-                <Download className="w-4 h-4" />
-                <span>
-                  {downloading
-                    ? t.details.downloading
-                    : item.price > 0
-                    ? `${t.details.directDownload} ($${finalPrice.toFixed(2)})`
-                    : `${t.details.directDownload} (${t.catalog.freeLabel})`}
-                </span>
-              </button>
+              {pricingMode === 'free' && (
+                <button
+                  type="button"
+                  onClick={handleDirectDownload}
+                  disabled={downloading}
+                  className="h-11 px-7 rounded-xl bg-[#0d9488] hover:bg-[#0f766e] text-white dark:bg-[#10d9a0] dark:hover:bg-[#0ec28f] dark:text-slate-950 font-bold text-sm inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer min-w-[200px]"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>
+                    {downloading
+                      ? t.details.downloading
+                      : `${t.details.directDownload} (${t.catalog.freeLabel})`}
+                  </span>
+                </button>
+              )}
+
+              {pricingMode === 'paid_download' && finalPrice > 0 && (
+                <button
+                  type="button"
+                  onClick={() => openCheckoutModal()}
+                  className="h-11 px-7 rounded-xl bg-[#0d9488] hover:bg-[#0f766e] text-white dark:bg-[#10d9a0] dark:hover:bg-[#0ec28f] dark:text-slate-950 font-bold text-sm inline-flex items-center justify-center gap-2 transition-colors cursor-pointer min-w-[210px]"
+                >
+                  <CreditCard className="w-4 h-4" />
+                  <span>
+                    {t.details.buyAndDownload} ({currencySymbol}{finalPrice})
+                  </span>
+                </button>
+              )}
+
+              {pricingMode === 'paid_download' && finalPrice <= 0 && (
+                <button
+                  type="button"
+                  onClick={handleDirectDownload}
+                  disabled={downloading}
+                  className="h-11 px-7 rounded-xl bg-[#0d9488] hover:bg-[#0f766e] text-white dark:bg-[#10d9a0] dark:hover:bg-[#0ec28f] dark:text-slate-950 font-bold text-sm inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer min-w-[200px]"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>
+                    {downloading
+                      ? t.details.downloading
+                      : `${t.details.directDownload} (${t.catalog.freeLabel})`}
+                  </span>
+                </button>
+              )}
+
+              {pricingMode === 'freemium_license' && (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleDirectDownload}
+                    disabled={downloading}
+                    className="h-11 px-6 rounded-xl bg-[#0d9488] hover:bg-[#0f766e] text-white dark:bg-[#10d9a0] dark:hover:bg-[#0ec28f] dark:text-slate-950 font-bold text-sm inline-flex items-center justify-center gap-2 transition-colors disabled:opacity-60 cursor-pointer"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>{downloading ? t.details.downloading : t.details.downloadFreeVersion}</span>
+                  </button>
+
+                  {basePrice > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => openCheckoutModal()}
+                      className="h-11 px-6 rounded-xl border border-teal-800/30 dark:border-[#10d9a0]/45 bg-[#07262a] hover:bg-[#0b3338] text-[#2ee6b8] dark:bg-[#0c2d33] dark:hover:bg-[#103b42] dark:text-[#2ee6b8] font-bold text-sm inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                    >
+                      <KeyRound className="w-4 h-4" />
+                      <span>
+                        {t.details.buyLicense} ({currencySymbol}{finalPrice})
+                      </span>
+                    </button>
+                  )}
+                </>
+              )}
 
               <button
                 type="button"
@@ -427,14 +768,16 @@ export function SoftwareDetailPage() {
                 {copiedShare && <span>Copied</span>}
               </button>
 
-              <button
-                type="button"
-                onClick={() => setShowCouponBox((prev) => !prev)}
-                className="h-11 px-3.5 rounded-xl border border-teal-900/15 dark:border-teal-500/25 bg-[#f7fcfa] dark:bg-[#0b2329] text-[#062326] dark:text-teal-100 hover:bg-white dark:hover:bg-[#0f2e36] transition-colors inline-flex items-center gap-1.5 text-xs font-medium cursor-pointer"
-              >
-                <Tag className="w-3.5 h-3.5" />
-                <span>{t.details.applyCoupon}</span>
-              </button>
+              {pricingMode !== 'free' && (
+                <button
+                  type="button"
+                  onClick={() => setShowCouponBox((prev) => !prev)}
+                  className="h-11 px-3.5 rounded-xl border border-teal-900/15 dark:border-teal-500/25 bg-[#f7fcfa] dark:bg-[#0b2329] text-[#062326] dark:text-teal-100 hover:bg-white dark:hover:bg-[#0f2e36] transition-colors inline-flex items-center gap-1.5 text-xs font-medium cursor-pointer"
+                >
+                  <Tag className="w-3.5 h-3.5" />
+                  <span>{t.details.applyCoupon}</span>
+                </button>
+              )}
             </div>
 
             {downloadSuccess && (
@@ -453,7 +796,7 @@ export function SoftwareDetailPage() {
                       {appliedCoupon.code} — {t.details.couponApplied} (
                       {appliedCoupon.discountType === 'percentage'
                         ? `${appliedCoupon.discountValue}%`
-                        : `$${appliedCoupon.discountValue}`}
+                        : `${currencySymbol}${appliedCoupon.discountValue}`}
                       )
                     </span>
                     <button
@@ -494,13 +837,112 @@ export function SoftwareDetailPage() {
               </div>
             )}
 
-            <p className="flex items-center justify-center md:justify-start gap-1.5 text-xs text-[#2c595d] dark:text-teal-200/70">
-              <ShieldCheck className="w-3.5 h-3.5 text-[#0d9488] dark:text-[#2ee6b8] shrink-0" />
-              <span>{t.details.zeroSpamNote}</span>
-            </p>
+            <div className="flex flex-wrap items-center justify-center md:justify-start gap-x-4 gap-y-1 text-xs text-[#2c595d] dark:text-teal-200/70">
+              <span className="inline-flex items-center gap-1.5">
+                <ShieldCheck className="w-3.5 h-3.5 text-[#0d9488] dark:text-[#2ee6b8] shrink-0" />
+                <span>{t.details.zeroSpamNote}</span>
+              </span>
+              {(pricingMode !== 'free' || item.generateLicenseKey) && (
+                <Link
+                  to="/license"
+                  className="inline-flex items-center gap-1 font-semibold text-[#0d9488] dark:text-[#2ee6b8] hover:underline"
+                >
+                  <KeyRound className="w-3.5 h-3.5" />
+                  <span>{t.details.checkLicenseStatus}</span>
+                </Link>
+              )}
+            </div>
           </div>
         </div>
       </section>
+
+      {/* Dynamic Subscription Packages Strip */}
+      {pricingMode !== 'free' && item.plans && item.plans.length > 0 && (
+        <section className="rounded-2xl border border-teal-900/15 dark:border-teal-500/20 bg-[#f2faf8]/92 dark:bg-[#081a1f]/92 backdrop-blur-xs p-5 sm:p-6 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h2 className="font-display text-base sm:text-lg font-bold text-[#062326] dark:text-white flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-[#0d9488] dark:text-[#2ee6b8]" />
+                {t.details.plansTitle}
+              </h2>
+              <p className="text-xs text-[#2c595d] dark:text-teal-200/70 mt-0.5">
+                {t.details.plansSubtitle}
+              </p>
+            </div>
+            {item.maxDevices && (
+              <span className="text-xs font-mono text-[#184549] dark:text-teal-200/80 bg-[#dff0ec] dark:bg-[#0d262d] px-2.5 py-1 rounded-lg self-start sm:self-auto">
+                Up to {item.maxDevices} device{item.maxDevices > 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+            {item.plans.map((plan) => {
+              const isSelected = selectedPlan?.id === plan.id;
+              return (
+                <div
+                  key={plan.id}
+                  onClick={() => setSelectedPlanId(plan.id)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setSelectedPlanId(plan.id);
+                    }
+                  }}
+                  className={`rounded-xl border p-4 flex flex-col justify-between gap-3 transition-all cursor-pointer ${
+                    isSelected
+                      ? 'border-[#0d9488] dark:border-[#10d9a0] bg-white/95 dark:bg-[#0c262d] shadow-md shadow-teal-950/5 ring-1 ring-[#0d9488]/40 dark:ring-[#10d9a0]/40'
+                      : 'border-teal-900/15 dark:border-teal-500/20 bg-white/60 dark:bg-[#061519]/70 hover:border-teal-700/35 dark:hover:border-teal-400/35'
+                  }`}
+                >
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-display font-bold text-sm text-[#062326] dark:text-white">
+                        {plan.name}
+                      </span>
+                      {plan.badge && (
+                        <span className="text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded bg-teal-500/15 text-teal-800 dark:bg-[#10d9a0]/20 dark:text-[#2ee6b8]">
+                          {plan.badge}
+                        </span>
+                      )}
+                    </div>
+                    <p className="font-mono text-2xl font-bold text-[#062326] dark:text-[#2ee6b8] tabular-nums">
+                      {currencySymbol}{plan.price}
+                    </p>
+                    <p className="text-xs font-mono text-[#2c595d] dark:text-teal-200/70">
+                      {plan.durationDays > 0
+                        ? `${plan.durationDays} ${t.details.daysLabel}`
+                        : t.details.lifetimeLabel}
+                    </p>
+                    {plan.description && (
+                      <p className="text-xs text-[#1e4347] dark:text-slate-300 pt-1">
+                        {plan.description}
+                      </p>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openCheckoutModal(plan.id);
+                    }}
+                    className={`w-full h-9 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                      isSelected
+                        ? 'bg-[#0d9488] hover:bg-[#0f766e] text-white dark:bg-[#10d9a0] dark:hover:bg-[#0ec28f] dark:text-slate-950'
+                        : 'bg-[#d6ede7] hover:bg-[#c3e2da] text-[#062326] dark:bg-[#11333b] dark:hover:bg-[#16424c] dark:text-teal-100'
+                    }`}
+                  >
+                    {pricingMode === 'paid_download' ? t.details.buyAndDownload : t.details.buyLicense}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {/* Main 2-Column Content */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
@@ -683,7 +1125,7 @@ export function SoftwareDetailPage() {
                     </p>
                   </div>
                   <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded-md bg-[#d6ede7] dark:bg-[#10d9a0]/15 text-[#062326] dark:text-[#2ee6b8] shrink-0 tabular-nums">
-                    {rel.price > 0 ? `$${rel.price}` : t.catalog.freeLabel}
+                    {rel.price > 0 ? `${rel.currency === 'BDT' ? '৳' : '$'}${rel.price}` : t.catalog.freeLabel}
                   </span>
                 </Link>
               ))}
@@ -691,6 +1133,315 @@ export function SoftwareDetailPage() {
           )}
         </aside>
       </div>
+
+      {/* bKash / Nagad Checkout & Instant License Modal */}
+      {showCheckoutModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 overflow-y-auto"
+          onClick={() => setShowCheckoutModal(false)}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl border border-teal-900/20 dark:border-teal-500/25 bg-[#f7fcfa] dark:bg-[#07181c] shadow-2xl overflow-hidden my-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-teal-900/15 dark:border-teal-500/20 bg-[#e8f5f1] dark:bg-[#0a2228]">
+              <div>
+                <h2 className="font-display text-lg font-bold text-[#062326] dark:text-white">
+                  {orderResult ? t.details.orderSuccessTitle : t.details.checkoutTitle}
+                </h2>
+                <p className="text-xs text-[#2c595d] dark:text-teal-200/70 mt-0.5">
+                  {item.name} {selectedPlan ? `· ${selectedPlan.name}` : ''}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCheckoutModal(false)}
+                className="p-2 rounded-lg text-[#2c595d] dark:text-teal-200/70 hover:bg-teal-900/10 dark:hover:bg-teal-500/15 cursor-pointer"
+                aria-label="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {orderResult ? (
+              <div className="p-6 space-y-5">
+                <div
+                  className={`rounded-xl border p-4 flex items-start gap-3 ${
+                    orderResult.status === 'verified'
+                      ? 'border-emerald-500/35 bg-emerald-500/10 text-emerald-900 dark:text-emerald-200'
+                      : 'border-teal-600/30 bg-teal-500/10 text-[#062326] dark:text-teal-100'
+                  }`}
+                >
+                  {orderResult.status === 'verified' ? (
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                  ) : (
+                    <Clock className="w-5 h-5 text-[#0d9488] dark:text-[#2ee6b8] shrink-0 mt-0.5" />
+                  )}
+                  <div className="space-y-1 text-xs">
+                    <p className="font-bold text-sm">
+                      {orderResult.status === 'verified'
+                        ? t.details.orderVerifiedBadge
+                        : t.details.orderProvisionalBadge}
+                    </p>
+                    <p className="opacity-85">{t.details.graceNote}</p>
+                  </div>
+                </div>
+
+                {/* License Key Box */}
+                <div className="rounded-xl border border-teal-900/20 dark:border-teal-500/25 bg-white dark:bg-[#051114] p-4 space-y-2">
+                  <div className="flex items-center justify-between text-xs text-[#2c595d] dark:text-teal-200/70">
+                    <span className="font-semibold flex items-center gap-1.5">
+                      <KeyRound className="w-3.5 h-3.5 text-[#0d9488] dark:text-[#2ee6b8]" />
+                      {t.details.licenseKeyLabel}
+                    </span>
+                    <span className="font-mono">{orderResult.planName}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 bg-[#eef8f5] dark:bg-[#0b2329] rounded-lg px-3 py-2.5 border border-teal-900/10 dark:border-teal-500/20">
+                    <code className="font-mono text-base sm:text-lg font-bold tracking-wider text-[#062326] dark:text-[#2ee6b8] select-all">
+                      {orderResult.licenseKey}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(orderResult.licenseKey);
+                        setCopiedKey(true);
+                        setTimeout(() => setCopiedKey(false), 2000);
+                      }}
+                      className="px-2.5 py-1.5 rounded-md bg-[#0d9488] text-white dark:bg-[#10d9a0] dark:text-slate-950 text-xs font-semibold inline-flex items-center gap-1 shrink-0 cursor-pointer"
+                    >
+                      {copiedKey ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedKey ? t.details.copied : 'Copy'}</span>
+                    </button>
+                  </div>
+                  <p className="text-[11px] font-mono text-[#2c595d] dark:text-teal-200/60">
+                    Order ID: {orderResult.orderId}
+                  </p>
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <button
+                    type="button"
+                    onClick={triggerFileDownload}
+                    className="flex-1 h-11 px-5 rounded-xl bg-[#0d9488] hover:bg-[#0f766e] text-white dark:bg-[#10d9a0] dark:hover:bg-[#0ec28f] dark:text-slate-950 font-bold text-sm inline-flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>{t.details.directDownload}</span>
+                  </button>
+                  <Link
+                    to={`/license?key=${encodeURIComponent(orderResult.licenseKey)}`}
+                    className="h-11 px-4 rounded-xl border border-teal-900/20 dark:border-teal-500/25 bg-white dark:bg-[#0b2329] text-xs font-semibold text-[#062326] dark:text-teal-100 inline-flex items-center justify-center gap-1.5 hover:bg-teal-50 dark:hover:bg-[#103038]"
+                  >
+                    <KeyRound className="w-3.5 h-3.5" />
+                    <span>{t.details.checkLicenseStatus}</span>
+                  </Link>
+                </div>
+              </div>
+            ) : (
+              <form onSubmit={handleCheckoutSubmit} className="p-6 space-y-4">
+                <p className="text-xs text-[#1e4347] dark:text-slate-300 leading-relaxed">
+                  {t.details.checkoutSubtitle}
+                </p>
+
+                {/* Package Switcher inside modal if multiple plans */}
+                {item.plans && item.plans.length > 0 && (
+                  <div className="grid grid-cols-2 gap-2">
+                    {item.plans.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => setSelectedPlanId(p.id)}
+                        className={`p-2.5 rounded-xl border text-left transition-colors cursor-pointer ${
+                          selectedPlan?.id === p.id
+                            ? 'border-[#0d9488] dark:border-[#10d9a0] bg-teal-500/10 dark:bg-[#10d9a0]/15'
+                            : 'border-teal-900/15 dark:border-teal-500/20 bg-white/80 dark:bg-[#051114]'
+                        }`}
+                      >
+                        <div className="text-xs font-semibold text-[#062326] dark:text-white truncate">
+                          {p.name}
+                        </div>
+                        <div className="font-mono text-sm font-bold text-[#0d9488] dark:text-[#2ee6b8]">
+                          {currencySymbol}{p.price}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Total Payable Strip */}
+                <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-[#dff0ec] dark:bg-[#0c262d] border border-teal-900/15 dark:border-teal-500/20">
+                  <span className="text-xs font-semibold text-[#062326] dark:text-teal-100">
+                    {t.details.finalPrice} {appliedCoupon ? `(${appliedCoupon.code})` : ''}
+                  </span>
+                  <div className="flex items-center gap-2 font-mono">
+                    {appliedCoupon && basePrice !== finalPrice && (
+                      <span className="text-xs line-through text-[#4e777b] dark:text-teal-200/50">
+                        {currencySymbol}{basePrice}
+                      </span>
+                    )}
+                    <span className="text-lg font-bold text-[#062326] dark:text-[#2ee6b8]">
+                      {currencySymbol}{finalPrice}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Payment Method Selector */}
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold text-[#062326] dark:text-teal-100 block">
+                    {t.details.paymentMethodLabel}
+                  </label>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    {paymentSettings.bkashEnabled && (
+                      <button
+                        type="button"
+                        onClick={() => setPaymentMethod('bkash')}
+                        className={`h-10 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                          paymentMethod === 'bkash'
+                            ? 'border-pink-600 bg-pink-600/15 text-pink-700 dark:text-pink-300 ring-1 ring-pink-500/40'
+                            : 'border-teal-900/15 dark:border-teal-500/20 bg-white dark:bg-[#051114] text-[#1e4347] dark:text-slate-300'
+                        }`}
+                      >
+                        <span className="w-2 h-2 rounded-full bg-pink-500" />
+                        bKash (Personal)
+                      </button>
+                    )}
+                    {paymentSettings.nagadEnabled && (
+                      <button
+                        type="button"
+                        onClick={() => setPaymentMethod('nagad')}
+                        className={`h-10 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                          paymentMethod === 'nagad'
+                            ? 'border-orange-600 bg-orange-600/15 text-orange-700 dark:text-orange-300 ring-1 ring-orange-500/40'
+                            : 'border-teal-900/15 dark:border-teal-500/20 bg-white dark:bg-[#051114] text-[#1e4347] dark:text-slate-300'
+                        }`}
+                      >
+                        <span className="w-2 h-2 rounded-full bg-orange-500" />
+                        Nagad (Personal)
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Admin Receiver Number Card */}
+                  {(() => {
+                    const activeNumber =
+                      paymentMethod === 'bkash'
+                        ? paymentSettings.bkashNumber
+                        : paymentSettings.nagadNumber;
+                    return (
+                      <div className="rounded-xl border border-teal-900/15 dark:border-teal-500/20 bg-white dark:bg-[#051114] p-3 space-y-2">
+                        <p className="text-[11px] text-[#2c595d] dark:text-teal-200/75">
+                          {t.details.sendMoneyInstruction}
+                        </p>
+                        {activeNumber ? (
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-mono text-base font-bold text-[#062326] dark:text-white select-all">
+                              {activeNumber}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void navigator.clipboard.writeText(activeNumber);
+                                setCopiedPayNum(true);
+                                setTimeout(() => setCopiedPayNum(false), 2000);
+                              }}
+                              className="px-2.5 py-1 rounded-lg bg-[#dff0ec] dark:bg-[#0e2a31] text-[#062326] dark:text-[#2ee6b8] text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
+                            >
+                              {copiedPayNum ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                              <span>{copiedPayNum ? t.details.copied : t.details.copyNumber}</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-amber-700 dark:text-amber-400">
+                            Payment number not set yet. Admin can set it in Admin → Payments &amp; Licenses.
+                          </p>
+                        )}
+                        {paymentSettings.paymentNote && (
+                          <p className="text-[11px] text-[#1e4347] dark:text-slate-400 border-t border-teal-900/10 dark:border-teal-500/15 pt-1.5">
+                            {paymentSettings.paymentNote}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* Customer & Transaction Fields */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-[#062326] dark:text-teal-100">
+                      {t.details.customerNameLabel}
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={customerName}
+                      onChange={(e) => setCustomerName(e.target.value)}
+                      placeholder="e.g. Arif Rahman"
+                      className="mt-1 w-full h-10 px-3 rounded-xl border border-teal-900/20 dark:border-teal-500/25 bg-white dark:bg-[#051114] text-sm text-[#062326] dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-[#062326] dark:text-teal-100">
+                      {t.details.customerEmailLabel}
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      value={customerEmail}
+                      onChange={(e) => setCustomerEmail(e.target.value)}
+                      placeholder="example@gmail.com"
+                      className="mt-1 w-full h-10 px-3 rounded-xl border border-teal-900/20 dark:border-teal-500/25 bg-white dark:bg-[#051114] text-sm text-[#062326] dark:text-white"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-[#062326] dark:text-teal-100">
+                      {t.details.senderPhoneLabel}
+                    </label>
+                    <input
+                      type="tel"
+                      required
+                      value={senderPhone}
+                      onChange={(e) => setSenderPhone(e.target.value)}
+                      placeholder="017XXXXXXXX"
+                      className="mt-1 w-full h-10 px-3 rounded-xl border border-teal-900/20 dark:border-teal-500/25 bg-white dark:bg-[#051114] text-sm font-mono text-[#062326] dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-[#062326] dark:text-teal-100">
+                      {t.details.trxIdLabel}
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={trxId}
+                      onChange={(e) => setTrxId(e.target.value.toUpperCase())}
+                      placeholder="BKA9X72LMQ"
+                      className="mt-1 w-full h-10 px-3 rounded-xl border border-teal-900/20 dark:border-teal-500/25 bg-white dark:bg-[#051114] text-sm font-mono uppercase text-[#062326] dark:text-white"
+                    />
+                  </div>
+                </div>
+
+                {checkoutError && (
+                  <div className="rounded-xl border border-red-300 dark:border-red-900/50 bg-red-50 dark:bg-red-950/30 p-3 text-xs text-red-700 dark:text-red-300">
+                    {checkoutError}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={checkoutSubmitting}
+                  className="w-full h-11 rounded-xl bg-[#0d9488] hover:bg-[#0f766e] text-white dark:bg-[#10d9a0] dark:hover:bg-[#0ec28f] dark:text-slate-950 font-bold text-sm transition-colors disabled:opacity-60 cursor-pointer"
+                >
+                  {checkoutSubmitting ? t.details.submittingCheckout : t.details.submitCheckout}
+                </button>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Fullscreen Screenshot Lightbox Modal */}
       {lightboxIndex !== null && galleryImages[lightboxIndex] && (

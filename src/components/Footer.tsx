@@ -108,6 +108,16 @@ export function Footer() {
           )}
 
           <Link
+            to="/license"
+            className={
+              isAdminRoute
+                ? 'hover:text-slate-900 dark:hover:text-zinc-100 transition-colors'
+                : 'hover:text-[#062326] dark:hover:text-[#2ee6b8] transition-colors font-medium'
+            }
+          >
+            {t.details.checkLicenseStatus}
+          </Link>
+          <Link
             to="/admin"
             className={
               isAdminRoute

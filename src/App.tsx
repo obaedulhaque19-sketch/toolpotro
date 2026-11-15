@@ -5,6 +5,7 @@ import { Footer } from './components/Footer';
 import { HomePage } from './pages/HomePage';
 import { SoftwareDetailPage } from './pages/SoftwareDetailPage';
 import { AdminPage } from './pages/AdminPage';
+import { LicenseStatusPage } from './pages/LicenseStatusPage';
 
 function AppLayout() {
   const location = useLocation();
@@ -23,6 +24,7 @@ function AppLayout() {
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/software/:id" element={<SoftwareDetailPage />} />
+          <Route path="/license" element={<LicenseStatusPage />} />
           <Route path="/admin" element={<AdminPage />} />
         </Routes>
       </div>

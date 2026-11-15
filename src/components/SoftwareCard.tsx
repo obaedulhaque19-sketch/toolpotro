@@ -8,6 +8,24 @@ export function SoftwareCard({ item }: { item: SoftwareItem }) {
   const { t } = useApp();
   const [imgError, setImgError] = useState(false);
 
+  const currencySymbol = item.currency === 'BDT' ? '৳' : '$';
+  const planPrices = (item.plans || []).map((p) => Number(p.price)).filter((p) => p > 0);
+  const lowestPlanPrice = planPrices.length > 0 ? Math.min(...planPrices) : 0;
+  const pricingMode =
+    item.pricingMode || (item.price > 0 || lowestPlanPrice > 0 ? 'paid_download' : 'free');
+  const displayAmount = lowestPlanPrice > 0 ? lowestPlanPrice : item.price;
+
+  let priceLabel = t.catalog.freeLabel;
+  let isPaidBadge = false;
+  if (pricingMode === 'freemium_license') {
+    priceLabel =
+      displayAmount > 0 ? `${t.catalog.freeLabel} · ${currencySymbol}${displayAmount}+` : t.catalog.freemiumLabel;
+    isPaidBadge = displayAmount > 0;
+  } else if (pricingMode === 'paid_download' && displayAmount > 0) {
+    priceLabel = planPrices.length > 1 ? `${t.catalog.fromPricePrefix} ${currencySymbol}${displayAmount}` : `${currencySymbol}${displayAmount}`;
+    isPaidBadge = true;
+  }
+
   return (
     <Link
       to={`/software/${item.id}`}
@@ -36,12 +54,12 @@ export function SoftwareCard({ item }: { item: SoftwareItem }) {
             </h3>
             <span
               className={`font-mono text-xs font-semibold tabular-nums px-2 py-0.5 rounded-md shrink-0 ${
-                item.price > 0
+                isPaidBadge
                   ? 'bg-sky-600/15 text-sky-800 dark:bg-sky-400/15 dark:text-sky-300'
                   : 'bg-teal-600/15 text-teal-800 dark:bg-[#10d9a0]/15 dark:text-[#2ee6b8]'
               }`}
             >
-              {item.price > 0 ? `$${item.price}` : t.catalog.freeLabel}
+              {priceLabel}
             </span>
           </div>
 

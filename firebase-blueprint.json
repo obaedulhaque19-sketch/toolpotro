@@ -2,7 +2,7 @@
   "entities": {
     "SoftwareItem": {
       "title": "SoftwareItem",
-      "description": "A distributable software package, Android APK, PC program, or browser extension.",
+      "description": "A distributable software package, Android APK, PC program, or browser extension with optional licensing and subscription plans.",
       "type": "object",
       "properties": {
         "name": { "type": "string", "minLength": 1, "maxLength": 120 },
@@ -19,6 +19,12 @@
         "screenshots": { "type": "array" },
         "installGuide": { "type": "string", "maxLength": 4000 },
         "price": { "type": "number" },
+        "pricingMode": { "type": "string", "enum": ["free", "paid_download", "freemium_license"] },
+        "currency": { "type": "string", "enum": ["USD", "BDT"] },
+        "plans": { "type": "array" },
+        "generateLicenseKey": { "type": "boolean" },
+        "gracePeriodHours": { "type": "number" },
+        "maxDevices": { "type": "integer" },
         "downloadsCount": { "type": "integer" },
         "status": { "type": "string", "enum": ["active", "archived"] },
         "featured": { "type": "boolean" },
@@ -89,6 +95,122 @@
       },
       "required": ["softwareId", "softwareName", "platform", "finalPrice", "createdAt"]
     },
+    "PaymentOrder": {
+      "title": "PaymentOrder",
+      "description": "Customer checkout order containing bKash/Nagad transaction details and customer contact info (admin-only read).",
+      "type": "object",
+      "properties": {
+        "orderId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "softwareId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "softwareName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "planId": { "type": "string", "maxLength": 80 },
+        "planName": { "type": "string", "maxLength": 80 },
+        "durationDays": { "type": "integer" },
+        "currency": { "type": "string", "enum": ["USD", "BDT"] },
+        "amount": { "type": "number" },
+        "couponCode": { "type": "string", "maxLength": 40 },
+        "paymentMethod": { "type": "string", "enum": ["bkash", "nagad", "free"] },
+        "customerName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "customerEmail": { "type": "string", "minLength": 3, "maxLength": 200 },
+        "senderPhone": { "type": "string", "minLength": 4, "maxLength": 30 },
+        "trxId": { "type": "string", "minLength": 2, "maxLength": 60 },
+        "licenseKey": { "type": "string", "maxLength": 64 },
+        "status": { "type": "string", "enum": ["provisional", "verified", "payment_required", "revoked"] },
+        "graceUntilMs": { "type": "integer" },
+        "expiresAtMs": { "type": "integer" },
+        "notes": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "orderId",
+        "softwareId",
+        "softwareName",
+        "currency",
+        "amount",
+        "paymentMethod",
+        "customerName",
+        "customerEmail",
+        "senderPhone",
+        "trxId",
+        "status",
+        "graceUntilMs",
+        "expiresAtMs",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "LicenseRecord": {
+      "title": "LicenseRecord",
+      "description": "Non-PII software license record keyed by unguessable License Key for in-app verification and status checks.",
+      "type": "object",
+      "properties": {
+        "licenseKey": { "type": "string", "minLength": 8, "maxLength": 64, "pattern": "^[A-Z0-9-]+$" },
+        "orderId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "softwareId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "softwareName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "planId": { "type": "string", "maxLength": 80 },
+        "planName": { "type": "string", "maxLength": 80 },
+        "durationDays": { "type": "integer" },
+        "currency": { "type": "string", "enum": ["USD", "BDT"] },
+        "amount": { "type": "number" },
+        "trxId": { "type": "string", "minLength": 2, "maxLength": 60 },
+        "status": { "type": "string", "enum": ["provisional", "verified", "payment_required", "revoked"] },
+        "graceUntilMs": { "type": "integer" },
+        "expiresAtMs": { "type": "integer" },
+        "maxDevices": { "type": "integer" },
+        "boundDevices": { "type": "array" },
+        "resubmittedTrxId": { "type": "string", "maxLength": 60 },
+        "resubmittedPhone": { "type": "string", "maxLength": 30 },
+        "resubmittedAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "licenseKey",
+        "orderId",
+        "softwareId",
+        "softwareName",
+        "currency",
+        "amount",
+        "trxId",
+        "status",
+        "graceUntilMs",
+        "expiresAtMs",
+        "maxDevices",
+        "boundDevices",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SmsTransaction": {
+      "title": "SmsTransaction",
+      "description": "Incoming bKash/Nagad SMS receipt forwarded by admin Android phone for payment reconciliation (admin-only).",
+      "type": "object",
+      "properties": {
+        "trxId": { "type": "string", "minLength": 2, "maxLength": 60 },
+        "provider": { "type": "string", "enum": ["bkash", "nagad"] },
+        "sender": { "type": "string", "maxLength": 40 },
+        "amount": { "type": "number" },
+        "senderPhone": { "type": "string", "maxLength": 40 },
+        "rawMessage": { "type": "string", "maxLength": 1000 },
+        "receivedAtMs": { "type": "integer" },
+        "matchedOrderId": { "type": "string", "maxLength": 128 },
+        "matchedLicenseKey": { "type": "string", "maxLength": 64 },
+        "status": { "type": "string", "enum": ["unused", "matched", "ignored"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "trxId",
+        "provider",
+        "amount",
+        "receivedAtMs",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
     "AdminUser": {
       "title": "AdminUser",
       "description": "Verified administrator record.",
@@ -102,13 +224,19 @@
     },
     "SiteSettings": {
       "title": "SiteSettings",
-      "description": "Global website configuration such as hero banner, contact email, social links, and slug redirects.",
+      "description": "Global website configuration such as hero banner, contact email, social links, payment display numbers, and slug redirects.",
       "type": "object",
       "properties": {
         "heroImageUrl": { "type": "string", "maxLength": 1000 },
         "contactEmail": { "type": "string", "format": "email", "maxLength": 200 },
         "facebookUrl": { "type": "string", "maxLength": 1000 },
         "redirects": { "type": "object" },
+        "bkashNumber": { "type": "string", "maxLength": 30 },
+        "nagadNumber": { "type": "string", "maxLength": 30 },
+        "bkashEnabled": { "type": "boolean" },
+        "nagadEnabled": { "type": "boolean" },
+        "paymentNote": { "type": "string", "maxLength": 400 },
+        "defaultGraceHours": { "type": "number" },
         "updatedAt": { "type": "string", "format": "date-time" }
       }
     }
@@ -126,13 +254,25 @@
       "schema": { "$ref": "#/entities/DownloadEvent" },
       "description": "Download analytics events; public create, admin-only read/delete."
     },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/PaymentOrder" },
+      "description": "Checkout orders with customer PII; public create with provisional status, admin-only read/update/delete."
+    },
+    "/licenses/{licenseKey}": {
+      "schema": { "$ref": "#/entities/LicenseRecord" },
+      "description": "Non-PII license state keyed by unguessable License Key; single-doc get by key, admin-only list/verification."
+    },
+    "/smsTransactions/{trxId}": {
+      "schema": { "$ref": "#/entities/SmsTransaction" },
+      "description": "Forwarded bKash/Nagad SMS receipts; strict admin-only read/write."
+    },
     "/admins/{adminId}": {
       "schema": { "$ref": "#/entities/AdminUser" },
       "description": "Admin role registry."
     },
     "/settings/{settingId}": {
       "schema": { "$ref": "#/entities/SiteSettings" },
-      "description": "Publicly readable site configuration (e.g. hero banner); admin-only write."
+      "description": "Publicly readable site configuration (hero banner, contact info, payment numbers); admin-only write."
     }
   }
 }

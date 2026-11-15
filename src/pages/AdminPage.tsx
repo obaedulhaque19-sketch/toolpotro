@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   collection,
   deleteDoc,
@@ -9,6 +9,7 @@ import {
   serverTimestamp,
   setDoc,
   updateDoc,
+  writeBatch,
 } from 'firebase/firestore';
 import {
   AlertCircle,
@@ -16,19 +17,27 @@ import {
   BarChart3,
   Check,
   CheckCircle2,
+  Copy,
+  CreditCard,
   Download,
   Edit3,
   ExternalLink,
   Globe,
+  KeyRound,
+  Lock,
   LogOut,
   Mail,
   Package,
   Plus,
+  RefreshCw,
   RotateCcw,
   ShieldAlert,
+  ShieldCheck,
+  Smartphone,
   Sparkles,
   Tag,
   Trash2,
+  Unlock,
   Upload,
   Image as ImageIcon,
   FileArchive,
@@ -40,15 +49,22 @@ import { useApp } from '../context/AppContext';
 import type {
   CouponCode,
   CouponScope,
+  CurrencyCode,
   DiscountType,
   DownloadEvent,
+  LicenseRecord,
+  LicenseStatus,
+  PaymentOrder,
+  SmsTransaction,
   SoftwareCategory,
   SoftwareFileType,
   SoftwareItem,
   SoftwarePlatform,
+  SoftwarePricingMode,
+  SubscriptionPlan,
 } from '../types';
 
-type AdminTab = 'software' | 'coupons' | 'analytics' | 'heroBanner' | 'seoSettings';
+type AdminTab = 'software' | 'payments' | 'coupons' | 'analytics' | 'heroBanner' | 'seoSettings';
 
 const DEFAULT_CONTACT_EMAIL = 'obaedulhaque19@gmail.com';
 const DEFAULT_FACEBOOK_URL = 'https://www.facebook.com/toolpotro';
@@ -69,6 +85,12 @@ const EMPTY_SOFTWARE_FORM = {
   screenshots: [] as string[],
   installGuide: '',
   price: 0,
+  pricingMode: 'free' as SoftwarePricingMode,
+  currency: 'BDT' as CurrencyCode,
+  plans: [] as SubscriptionPlan[],
+  generateLicenseKey: false,
+  gracePeriodHours: 2,
+  maxDevices: 1,
   featured: false,
 };
 
@@ -103,6 +125,29 @@ export function AdminPage() {
   const [events, setEvents] = useState<DownloadEvent[]>([]);
   const [seeding, setSeeding] = useState(false);
 
+  // Payments, Licenses & SMS Sync State
+  const [orders, setOrders] = useState<PaymentOrder[]>([]);
+  const [licenses, setLicenses] = useState<LicenseRecord[]>([]);
+  const [smsList, setSmsList] = useState<SmsTransaction[]>([]);
+  const [orderFilter, setOrderFilter] = useState<'all' | LicenseStatus>('all');
+  const [bkashNumber, setBkashNumber] = useState('');
+  const [nagadNumber, setNagadNumber] = useState('');
+  const [bkashEnabled, setBkashEnabled] = useState(true);
+  const [nagadEnabled, setNagadEnabled] = useState(true);
+  const [paymentNote, setPaymentNote] = useState('');
+  const [defaultGraceHours, setDefaultGraceHours] = useState(2);
+  const [paymentSaving, setPaymentSaving] = useState(false);
+  const [paymentSuccess, setPaymentSuccess] = useState(false);
+  const [webhookStatus, setWebhookStatus] = useState<{
+    webhookSecretConfigured: boolean;
+    firebaseAdminConfigured: boolean;
+    bufferedReceiptsCount: number;
+    unsyncedCount: number;
+  } | null>(null);
+  const [syncingSms, setSyncingSms] = useState(false);
+  const [syncSummary, setSyncSummary] = useState<string | null>(null);
+  const [copiedWebhook, setCopiedWebhook] = useState(false);
+
   // Software Modal State
   const [showSoftwareModal, setShowSoftwareModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -121,6 +166,12 @@ export function AdminPage() {
   const [heroBannerSaving, setHeroBannerSaving] = useState(false);
   const [heroBannerSuccess, setHeroBannerSuccess] = useState(false);
   const [heroBannerError, setHeroBannerError] = useState<string | null>(null);
+
+  // Track original & session-uploaded GitHub Release URLs for automatic orphan cleanup
+  const originalSoftwareAssetsRef = useRef<string[]>([]);
+  const sessionSoftwareUploadsRef = useRef<string[]>([]);
+  const savedHeroBannerRef = useRef<string>('');
+  const sessionHeroUploadsRef = useRef<string[]>([]);
 
   // SEO, Contact & Redirect Settings State
   const [contactEmail, setContactEmail] = useState<string>(DEFAULT_CONTACT_EMAIL);
@@ -182,6 +233,49 @@ export function AdminPage() {
     });
   };
 
+  const getReferencedGitHubUrls = (excludeIds: string[] = [], excludeHero = false): Set<string> => {
+    const excludeSet = new Set(excludeIds);
+    const used = new Set<string>();
+    for (const s of softwareList) {
+      if (excludeSet.has(s.id)) continue;
+      if (s.downloadUrl) used.add(s.downloadUrl.trim());
+      if (s.thumbnailUrl) used.add(s.thumbnailUrl.trim());
+      for (const sc of s.screenshots || []) {
+        if (sc) used.add(sc.trim());
+      }
+    }
+    if (!excludeHero && savedHeroBannerRef.current) {
+      used.add(savedHeroBannerRef.current.trim());
+    }
+    return used;
+  };
+
+  const deleteGitHubAssets = async (urls: string[]) => {
+    if (!user) return;
+    const uniqueGitHubUrls = Array.from(
+      new Set(
+        urls
+          .map((u) => u.trim())
+          .filter((u) => u.includes('github.com/'))
+      )
+    );
+    if (uniqueGitHubUrls.length === 0) return;
+
+    try {
+      const idToken = await user.getIdToken();
+      await fetch('/api/github/asset', {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ urls: uniqueGitHubUrls }),
+      });
+    } catch {
+      // Non-fatal cleanup error; never block primary Firestore save/delete
+    }
+  };
+
   const handlePackageUpload = async (file: File) => {
     setUploadError(null);
     const detectedSize = formatBytes(file.size);
@@ -200,6 +294,7 @@ export function AdminPage() {
     setPackageUploadProgress(0);
     try {
       const url = await uploadToGitHubReleases(file, setPackageUploadProgress);
+      sessionSoftwareUploadsRef.current.push(url);
       setSoftwareForm((prev) => ({ ...prev, downloadUrl: url }));
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Package upload failed');
@@ -213,6 +308,7 @@ export function AdminPage() {
     setImageUploadProgress(0);
     try {
       const url = await uploadToGitHubReleases(file, setImageUploadProgress);
+      sessionSoftwareUploadsRef.current.push(url);
       setSoftwareForm((prev) => ({ ...prev, thumbnailUrl: url }));
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Image upload failed');
@@ -232,6 +328,7 @@ export function AdminPage() {
       const uploadedUrls: string[] = [];
       for (const file of selected) {
         const url = await uploadToGitHubReleases(file, () => {});
+        sessionSoftwareUploadsRef.current.push(url);
         uploadedUrls.push(url);
       }
       setSoftwareForm((prev) => ({
@@ -291,8 +388,11 @@ export function AdminPage() {
       doc(db, 'settings', 'hero'),
       (snap) => {
         if (snap.exists() && snap.data()?.heroImageUrl) {
-          setHeroBannerUrl(snap.data().heroImageUrl);
+          const savedUrl = String(snap.data().heroImageUrl).trim();
+          savedHeroBannerRef.current = savedUrl;
+          setHeroBannerUrl(savedUrl);
         } else {
+          savedHeroBannerRef.current = '';
           setHeroBannerUrl('');
         }
       },
@@ -331,6 +431,64 @@ export function AdminPage() {
       () => {}
     );
 
+    const unsubPaymentSettings = onSnapshot(
+      doc(db, 'settings', 'payment'),
+      (snap) => {
+        if (snap.exists()) {
+          const d = snap.data();
+          setBkashNumber(typeof d?.bkashNumber === 'string' ? d.bkashNumber : '');
+          setNagadNumber(typeof d?.nagadNumber === 'string' ? d.nagadNumber : '');
+          setBkashEnabled(d?.bkashEnabled !== false);
+          setNagadEnabled(d?.nagadEnabled !== false);
+          setPaymentNote(typeof d?.paymentNote === 'string' ? d.paymentNote : '');
+          setDefaultGraceHours(Number(d?.defaultGraceHours ?? 2));
+        }
+      },
+      () => {}
+    );
+
+    const ordersQuery = query(collection(db, 'orders'), orderBy('createdAt', 'desc'));
+    const unsubOrders = onSnapshot(
+      ordersQuery,
+      (snap) => {
+        setOrders(
+          snap.docs.slice(0, 150).map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<PaymentOrder, 'id'>),
+          }))
+        );
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, 'orders')
+    );
+
+    const licensesQuery = query(collection(db, 'licenses'), orderBy('createdAt', 'desc'));
+    const unsubLicenses = onSnapshot(
+      licensesQuery,
+      (snap) => {
+        setLicenses(
+          snap.docs.slice(0, 150).map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<LicenseRecord, 'id'>),
+          }))
+        );
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, 'licenses')
+    );
+
+    const smsQuery = query(collection(db, 'smsTransactions'), orderBy('receivedAtMs', 'desc'));
+    const unsubSms = onSnapshot(
+      smsQuery,
+      (snap) => {
+        setSmsList(
+          snap.docs.slice(0, 150).map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<SmsTransaction, 'id'>),
+          }))
+        );
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, 'smsTransactions')
+    );
+
     return () => {
       unsubSoftware();
       unsubCoupons();
@@ -338,8 +496,180 @@ export function AdminPage() {
       unsubHero();
       unsubContact();
       unsubRedirects();
+      unsubPaymentSettings();
+      unsubOrders();
+      unsubLicenses();
+      unsubSms();
     };
   }, [isAdmin]);
+
+  const loadWebhookStatus = useCallback(async () => {
+    if (!user || !isAdmin) return;
+    try {
+      const idToken = await user.getIdToken();
+      const resp = await fetch('/api/payments/webhook-status', {
+        headers: { Authorization: `Bearer ${idToken}` },
+      });
+      if (resp.ok) {
+        const data = (await resp.json()) as {
+          webhookSecretConfigured: boolean;
+          firebaseAdminConfigured: boolean;
+          bufferedReceiptsCount: number;
+          unsyncedCount: number;
+        };
+        setWebhookStatus(data);
+      }
+    } catch {
+      // Ignore network hiccup
+    }
+  }, [user, isAdmin]);
+
+  const syncSmsQueueAndMatch = useCallback(async () => {
+    if (!user || !isAdmin || syncingSms) return;
+    setSyncingSms(true);
+    setSyncSummary(null);
+
+    try {
+      const idToken = await user.getIdToken();
+      const queueResp = await fetch('/api/payments/sms-queue', {
+        headers: { Authorization: `Bearer ${idToken}` },
+      });
+      if (!queueResp.ok) {
+        setSyncingSms(false);
+        return;
+      }
+
+      const queueJson = (await queueResp.json()) as {
+        receipts?: Array<{
+          trxId: string;
+          provider: 'bkash' | 'nagad';
+          sender?: string;
+          amount: number;
+          senderPhone?: string;
+          rawMessage?: string;
+          receivedAtMs: number;
+          matchedOrderId?: string;
+          matchedLicenseKey?: string;
+          status: 'unused' | 'matched' | 'ignored';
+          syncedToFirestore?: boolean;
+        }>;
+      };
+
+      const incomingReceipts = queueJson.receipts || [];
+      const existingSmsMap = new Map(smsList.map((s) => [s.trxId.toUpperCase(), s]));
+      const syncedTrxIds: string[] = [];
+      let newSmsCount = 0;
+
+      // 1. Write new buffered SMS receipts into Firestore smsTransactions
+      for (const r of incomingReceipts) {
+        const cleanTrx = r.trxId.toUpperCase().replace(/[^A-Z0-9_-]/g, '_');
+        if (!cleanTrx) continue;
+        const existing = existingSmsMap.get(r.trxId.toUpperCase());
+        if (!existing) {
+          await setDoc(doc(db, 'smsTransactions', cleanTrx), {
+            trxId: r.trxId.toUpperCase(),
+            provider: r.provider,
+            sender: r.sender || r.provider,
+            amount: Number(r.amount) || 0,
+            senderPhone: r.senderPhone || '',
+            rawMessage: (r.rawMessage || '').slice(0, 1000),
+            receivedAtMs: Math.floor(r.receivedAtMs || Date.now()),
+            matchedOrderId: r.matchedOrderId || '',
+            matchedLicenseKey: r.matchedLicenseKey || '',
+            status: r.status || 'unused',
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+          newSmsCount += 1;
+        }
+        if (!r.syncedToFirestore) {
+          syncedTrxIds.push(r.trxId);
+        }
+      }
+
+      if (syncedTrxIds.length > 0) {
+        await fetch('/api/payments/sms-queue/ack', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${idToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ trxIds: syncedTrxIds }),
+        });
+      }
+
+      // 2. Auto-match any pending licenses/orders against unused SMS receipts (checking both Firestore & fresh queue)
+      const combinedSms = new Map<string, { trxId: string; amount: number; status: string }>();
+      for (const s of smsList) {
+        combinedSms.set(s.trxId.toUpperCase(), {
+          trxId: s.trxId.toUpperCase(),
+          amount: Number(s.amount),
+          status: s.status,
+        });
+      }
+      for (const r of incomingReceipts) {
+        combinedSms.set(r.trxId.toUpperCase(), {
+          trxId: r.trxId.toUpperCase(),
+          amount: Number(r.amount),
+          status: r.status,
+        });
+      }
+
+      const licenseByOrderId = new Map(licenses.map((l) => [l.orderId, l]));
+      let autoMatchedCount = 0;
+
+      for (const ord of orders) {
+        if (ord.status !== 'provisional' && ord.status !== 'payment_required') continue;
+        const lic = licenseByOrderId.get(ord.orderId);
+        const primaryTrx = ord.trxId.toUpperCase().trim();
+        const resubmittedTrx = (lic?.resubmittedTrxId || '').toUpperCase().trim();
+        const smsCandidate =
+          (resubmittedTrx && combinedSms.get(resubmittedTrx)) || combinedSms.get(primaryTrx);
+
+        if (
+          smsCandidate &&
+          smsCandidate.amount + 0.01 >= ord.amount &&
+          smsCandidate.status !== 'ignored'
+        ) {
+          const batch = writeBatch(db);
+          batch.update(doc(db, 'orders', ord.orderId), {
+            status: 'verified',
+            updatedAt: serverTimestamp(),
+          });
+          if (lic) {
+            batch.update(doc(db, 'licenses', lic.licenseKey), {
+              status: 'verified',
+              updatedAt: serverTimestamp(),
+            });
+          }
+          const safeSmsId = smsCandidate.trxId.replace(/[^A-Z0-9_-]/g, '_');
+          batch.update(doc(db, 'smsTransactions', safeSmsId), {
+            status: 'matched',
+            matchedOrderId: ord.orderId,
+            matchedLicenseKey: lic?.licenseKey || '',
+            updatedAt: serverTimestamp(),
+          });
+          await batch.commit();
+          autoMatchedCount += 1;
+        }
+      }
+
+      await loadWebhookStatus();
+      setSyncSummary(
+        `Synced ${newSmsCount} new SMS · Auto-verified ${autoMatchedCount} order(s).`
+      );
+    } catch {
+      setSyncSummary('Sync completed with partial errors.');
+    } finally {
+      setSyncingSms(false);
+    }
+  }, [user, isAdmin, syncingSms, smsList, orders, licenses, loadWebhookStatus]);
+
+  useEffect(() => {
+    if (isAdmin) {
+      void loadWebhookStatus();
+    }
+  }, [isAdmin, loadWebhookStatus]);
 
   const stats = useMemo(() => {
     const totalDownloads = softwareList.reduce((acc, s) => acc + (s.downloadsCount || 0), 0);
@@ -384,6 +714,8 @@ export function AdminPage() {
   const openAddSoftware = () => {
     setUploadError(null);
     setEditingId(null);
+    originalSoftwareAssetsRef.current = [];
+    sessionSoftwareUploadsRef.current = [];
     setSoftwareForm(EMPTY_SOFTWARE_FORM);
     setShowSoftwareModal(true);
   };
@@ -391,6 +723,17 @@ export function AdminPage() {
   const openEditSoftware = (item: SoftwareItem) => {
     setUploadError(null);
     setEditingId(item.id);
+    originalSoftwareAssetsRef.current = [
+      item.downloadUrl,
+      item.thumbnailUrl || '',
+      ...(item.screenshots || []),
+    ]
+      .map((u) => u.trim())
+      .filter(Boolean);
+    sessionSoftwareUploadsRef.current = [];
+    const inferredMode: SoftwarePricingMode =
+      item.pricingMode ||
+      (item.price > 0 || (item.plans?.length ?? 0) > 0 ? 'paid_download' : 'free');
     setSoftwareForm({
       id: item.id,
       name: item.name,
@@ -407,9 +750,28 @@ export function AdminPage() {
       screenshots: item.screenshots || [],
       installGuide: item.installGuide || '',
       price: item.price,
+      pricingMode: inferredMode,
+      currency: item.currency || 'USD',
+      plans: item.plans || [],
+      generateLicenseKey: Boolean(item.generateLicenseKey ?? inferredMode !== 'free'),
+      gracePeriodHours: typeof item.gracePeriodHours === 'number' ? item.gracePeriodHours : 2,
+      maxDevices: typeof item.maxDevices === 'number' ? item.maxDevices : 1,
       featured: item.featured,
     });
     setShowSoftwareModal(true);
+  };
+
+  const closeSoftwareModal = () => {
+    const referenced = getReferencedGitHubUrls([], false);
+    const canceledOrphans = sessionSoftwareUploadsRef.current.filter(
+      (url) => !referenced.has(url.trim())
+    );
+    if (canceledOrphans.length > 0) {
+      void deleteGitHubAssets(canceledOrphans);
+    }
+    sessionSoftwareUploadsRef.current = [];
+    originalSoftwareAssetsRef.current = [];
+    setShowSoftwareModal(false);
   };
 
   const cleanSlugPreview = useMemo(() => {
@@ -506,6 +868,34 @@ export function AdminPage() {
     setSavingSoftware(true);
     const docId = cleanSlug;
 
+    const cleanPlans = softwareForm.plans
+      .filter((p) => p.name.trim().length > 0)
+      .slice(0, 8)
+      .map((p, idx) => ({
+        id: (p.id || `plan_${idx + 1}`).trim().slice(0, 60),
+        name: p.name.trim().slice(0, 80),
+        durationDays: Math.max(0, Math.floor(Number(p.durationDays) || 0)),
+        price: Math.max(0, Number(p.price) || 0),
+        badge: (p.badge || '').trim().slice(0, 30),
+        description: (p.description || '').trim().slice(0, 160),
+      }));
+
+    const pricingFields = {
+      price:
+        softwareForm.pricingMode === 'free'
+          ? 0
+          : cleanPlans.length > 0
+          ? Math.min(...cleanPlans.map((p) => p.price))
+          : Number(softwareForm.price) || 0,
+      pricingMode: softwareForm.pricingMode,
+      currency: softwareForm.currency,
+      plans: softwareForm.pricingMode === 'free' ? [] : cleanPlans,
+      generateLicenseKey:
+        softwareForm.pricingMode === 'free' ? false : Boolean(softwareForm.generateLicenseKey),
+      gracePeriodHours: Math.max(0, Math.min(168, Number(softwareForm.gracePeriodHours) || 0)),
+      maxDevices: Math.max(1, Math.min(50, Math.floor(Number(softwareForm.maxDevices) || 1))),
+    };
+
     try {
       if (editingId && cleanSlug === editingId) {
         await updateDoc(doc(db, 'software', docId), {
@@ -522,7 +912,7 @@ export function AdminPage() {
           thumbnailUrl: softwareForm.thumbnailUrl.trim(),
           screenshots: softwareForm.screenshots,
           installGuide: softwareForm.installGuide.trim(),
-          price: Number(softwareForm.price) || 0,
+          ...pricingFields,
           featured: Boolean(softwareForm.featured),
           updatedAt: serverTimestamp(),
         });
@@ -542,7 +932,7 @@ export function AdminPage() {
           thumbnailUrl: softwareForm.thumbnailUrl.trim(),
           screenshots: softwareForm.screenshots,
           installGuide: softwareForm.installGuide.trim(),
-          price: Number(softwareForm.price) || 0,
+          ...pricingFields,
           downloadsCount: existingItem?.downloadsCount ?? 0,
           status: existingItem?.status ?? 'active',
           featured: Boolean(softwareForm.featured),
@@ -596,7 +986,7 @@ export function AdminPage() {
           thumbnailUrl: softwareForm.thumbnailUrl.trim(),
           screenshots: softwareForm.screenshots,
           installGuide: softwareForm.installGuide.trim(),
-          price: Number(softwareForm.price) || 0,
+          ...pricingFields,
           downloadsCount: 0,
           status: 'active',
           featured: Boolean(softwareForm.featured),
@@ -604,6 +994,31 @@ export function AdminPage() {
           updatedAt: serverTimestamp(),
         });
       }
+      // Remove any replaced or discarded GitHub Release files no longer referenced anywhere
+      const finalKeptSet = new Set(
+        [
+          softwareForm.downloadUrl.trim(),
+          softwareForm.thumbnailUrl.trim(),
+          ...softwareForm.screenshots.map((s) => s.trim()),
+        ].filter(Boolean)
+      );
+      const referencedElsewhere = getReferencedGitHubUrls(
+        editingId ? [editingId, cleanSlug] : [cleanSlug],
+        false
+      );
+      const orphanedUrls = [
+        ...originalSoftwareAssetsRef.current,
+        ...sessionSoftwareUploadsRef.current,
+      ].filter((url) => {
+        const trimmed = url.trim();
+        return trimmed && !finalKeptSet.has(trimmed) && !referencedElsewhere.has(trimmed);
+      });
+      if (orphanedUrls.length > 0) {
+        void deleteGitHubAssets(orphanedUrls);
+      }
+
+      sessionSoftwareUploadsRef.current = [];
+      originalSoftwareAssetsRef.current = [];
       setShowSoftwareModal(false);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `software/${docId}`);
@@ -626,20 +1041,16 @@ export function AdminPage() {
 
   const handleDeleteSoftware = async (item: SoftwareItem) => {
     try {
-      if (user && (item.downloadUrl?.includes('github.com/') || item.thumbnailUrl?.includes('github.com/'))) {
-        const idToken = await user.getIdToken();
-        await fetch('/api/github/asset', {
-          method: 'DELETE',
-          headers: {
-            Authorization: `Bearer ${idToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            downloadUrl: item.downloadUrl,
-            thumbnailUrl: item.thumbnailUrl,
-          }),
-        }).catch(() => {});
-      }
+      const referencedElsewhere = getReferencedGitHubUrls([item.id], false);
+      const candidateUrls = [
+        item.downloadUrl,
+        item.thumbnailUrl || '',
+        ...(item.screenshots || []),
+      ]
+        .map((u) => u.trim())
+        .filter((u) => u && !referencedElsewhere.has(u));
+
+      await deleteGitHubAssets(candidateUrls);
       await deleteDoc(doc(db, 'software', item.id));
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, `software/${item.id}`);
@@ -700,6 +1111,7 @@ export function AdminPage() {
     setHeroBannerUploadProgress(0);
     try {
       const url = await uploadToGitHubReleases(file, setHeroBannerUploadProgress);
+      sessionHeroUploadsRef.current.push(url);
       setHeroBannerUrl(url);
     } catch (err) {
       setHeroBannerError(err instanceof Error ? err.message : 'Hero banner upload failed');
@@ -714,15 +1126,29 @@ export function AdminPage() {
     setHeroBannerSaving(true);
     setHeroBannerError(null);
     setHeroBannerSuccess(false);
+    const finalBannerUrl = heroBannerUrl.trim();
     try {
       await setDoc(
         doc(db, 'settings', 'hero'),
         {
-          heroImageUrl: heroBannerUrl.trim(),
+          heroImageUrl: finalBannerUrl,
           updatedAt: serverTimestamp(),
         },
         { merge: true }
       );
+      const referencedInSoftware = getReferencedGitHubUrls([], true);
+      const orphanedBannerUrls = [
+        savedHeroBannerRef.current,
+        ...sessionHeroUploadsRef.current,
+      ]
+        .map((u) => u.trim())
+        .filter((u) => u && u !== finalBannerUrl && !referencedInSoftware.has(u));
+      if (orphanedBannerUrls.length > 0) {
+        void deleteGitHubAssets(orphanedBannerUrls);
+      }
+      savedHeroBannerRef.current = finalBannerUrl;
+      sessionHeroUploadsRef.current = [];
+
       setHeroBannerSuccess(true);
       setTimeout(() => setHeroBannerSuccess(false), 4000);
     } catch (err) {
@@ -746,6 +1172,18 @@ export function AdminPage() {
         },
         { merge: true }
       );
+      const referencedInSoftware = getReferencedGitHubUrls([], true);
+      const orphanedBannerUrls = [
+        savedHeroBannerRef.current,
+        ...sessionHeroUploadsRef.current,
+      ]
+        .map((u) => u.trim())
+        .filter((u) => u && !referencedInSoftware.has(u));
+      if (orphanedBannerUrls.length > 0) {
+        void deleteGitHubAssets(orphanedBannerUrls);
+      }
+      savedHeroBannerRef.current = '';
+      sessionHeroUploadsRef.current = [];
       setHeroBannerUrl('');
       setHeroBannerSuccess(true);
       setTimeout(() => setHeroBannerSuccess(false), 4000);
@@ -779,6 +1217,63 @@ export function AdminPage() {
       handleFirestoreError(err, OperationType.WRITE, 'settings/contact');
     } finally {
       setContactSaving(false);
+    }
+  };
+
+  const handleSavePaymentSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPaymentSaving(true);
+    setPaymentSuccess(false);
+    try {
+      await setDoc(
+        doc(db, 'settings', 'payment'),
+        {
+          bkashNumber: bkashNumber.trim(),
+          nagadNumber: nagadNumber.trim(),
+          bkashEnabled: Boolean(bkashEnabled),
+          nagadEnabled: Boolean(nagadEnabled),
+          paymentNote: paymentNote.trim(),
+          defaultGraceHours: Math.max(0, Math.min(168, Number(defaultGraceHours) || 0)),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      setPaymentSuccess(true);
+      setTimeout(() => setPaymentSuccess(false), 4000);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'settings/payment');
+    } finally {
+      setPaymentSaving(false);
+    }
+  };
+
+  const handleUpdateOrderStatus = async (order: PaymentOrder, nextStatus: LicenseStatus) => {
+    try {
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'orders', order.orderId), {
+        status: nextStatus,
+        updatedAt: serverTimestamp(),
+      });
+      if (order.licenseKey) {
+        batch.update(doc(db, 'licenses', order.licenseKey), {
+          status: nextStatus,
+          updatedAt: serverTimestamp(),
+        });
+      }
+      await batch.commit();
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `orders/${order.orderId}`);
+    }
+  };
+
+  const handleDeleteOrderAndLicense = async (order: PaymentOrder) => {
+    try {
+      await deleteDoc(doc(db, 'orders', order.orderId));
+      if (order.licenseKey) {
+        await deleteDoc(doc(db, 'licenses', order.licenseKey));
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `orders/${order.orderId}`);
     }
   };
 
@@ -964,7 +1459,7 @@ export function AdminPage() {
       {/* Workspace Tabs */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-zinc-900 rounded-xl border border-slate-200/70 dark:border-zinc-800 overflow-x-auto">
-          {(['software', 'coupons', 'analytics', 'heroBanner', 'seoSettings'] as AdminTab[]).map((tab) => (
+          {(['software', 'payments', 'coupons', 'analytics', 'heroBanner', 'seoSettings'] as AdminTab[]).map((tab) => (
             <button
               key={tab}
               type="button"
@@ -1080,6 +1575,419 @@ export function AdminPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Tab: Payments, Webhooks, Orders & Licenses */}
+      {activeTab === 'payments' && (
+        <div className="space-y-6">
+          {/* Top Row: bKash/Nagad Settings + Android PaySync Webhook Status */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* bKash & Nagad Receiver Numbers Form */}
+            <div className="lg:col-span-7 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 space-y-5">
+              <div>
+                <h2 className="font-display text-lg font-bold text-slate-900 dark:text-zinc-50 flex items-center gap-2">
+                  <CreditCard className="w-5 h-5 text-teal-700 dark:text-teal-400" />
+                  bKash &amp; Nagad Checkout Numbers
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1">
+                  Displayed to customers inside the checkout popup on paid &amp; freemium software pages.
+                </p>
+              </div>
+
+              {paymentSuccess && (
+                <div className="rounded-xl border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50 dark:bg-emerald-950/30 p-3 text-xs text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
+                  <Check className="w-4 h-4" />
+                  Payment numbers &amp; grace period settings saved!
+                </div>
+              )}
+
+              <form onSubmit={handleSavePaymentSettings} className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-medium text-slate-700 dark:text-zinc-300">
+                        bKash Personal Number
+                      </label>
+                      <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-500 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={bkashEnabled}
+                          onChange={(e) => setBkashEnabled(e.target.checked)}
+                        />
+                        Enabled
+                      </label>
+                    </div>
+                    <input
+                      type="text"
+                      value={bkashNumber}
+                      onChange={(e) => setBkashNumber(e.target.value)}
+                      placeholder="017XXXXXXXX"
+                      className="w-full h-10 px-3 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 font-mono text-sm"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-medium text-slate-700 dark:text-zinc-300">
+                        Nagad Personal Number
+                      </label>
+                      <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-500 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={nagadEnabled}
+                          onChange={(e) => setNagadEnabled(e.target.checked)}
+                        />
+                        Enabled
+                      </label>
+                    </div>
+                    <input
+                      type="text"
+                      value={nagadNumber}
+                      onChange={(e) => setNagadNumber(e.target.value)}
+                      placeholder="018XXXXXXXX"
+                      className="w-full h-10 px-3 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 font-mono text-sm"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <label className="text-xs font-medium text-slate-700 dark:text-zinc-300 block mb-1">
+                      Default Grace Period (Hours)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="168"
+                      step="0.5"
+                      value={defaultGraceHours}
+                      onChange={(e) => setDefaultGraceHours(Number(e.target.value))}
+                      className="w-full h-10 px-3 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 font-mono text-sm"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="text-xs font-medium text-slate-700 dark:text-zinc-300 block mb-1">
+                      Checkout Instruction Note (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={paymentNote}
+                      onChange={(e) => setPaymentNote(e.target.value)}
+                      placeholder="Send Money করে TrxID ও নাম্বার দিন — সাথে সাথেই লিংক পাবেন।"
+                      className="w-full h-10 px-3 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 text-sm"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={paymentSaving}
+                  className="h-10 px-5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-semibold cursor-pointer disabled:opacity-50"
+                >
+                  {paymentSaving ? 'Saving...' : 'Save Payment Settings'}
+                </button>
+              </form>
+            </div>
+
+            {/* Android PaySync Webhook & Auto-Sync Card */}
+            <div className="lg:col-span-5 rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 space-y-4">
+              <div>
+                <h2 className="font-display text-lg font-bold text-slate-900 dark:text-zinc-50 flex items-center gap-2">
+                  <Smartphone className="w-5 h-5 text-teal-700 dark:text-teal-400" />
+                  Android PaySync Webhook
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1">
+                  Paste this URL into your Android SMS forwarder app with your <span className="font-mono">SMS_WEBHOOK_SECRET</span>.
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 p-3 space-y-1.5">
+                <span className="text-[11px] font-semibold text-slate-500 dark:text-zinc-400 uppercase">
+                  Webhook Endpoint URL
+                </span>
+                <div className="flex items-center justify-between gap-2">
+                  <code className="text-xs font-mono text-slate-900 dark:text-teal-300 truncate">
+                    {`${window.location.origin}/api/payments/sms-webhook`}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(
+                        `${window.location.origin}/api/payments/sms-webhook`
+                      );
+                      setCopiedWebhook(true);
+                      setTimeout(() => setCopiedWebhook(false), 2000);
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-slate-900 dark:bg-zinc-800 text-white text-[11px] font-semibold inline-flex items-center gap-1 shrink-0 cursor-pointer"
+                  >
+                    {copiedWebhook ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    <span>{copiedWebhook ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5 text-xs">
+                <div className="rounded-xl border border-slate-200 dark:border-zinc-800 p-3">
+                  <span className="text-slate-500 dark:text-zinc-400 block text-[11px]">
+                    SMS_WEBHOOK_SECRET
+                  </span>
+                  <span
+                    className={`font-mono font-bold mt-0.5 inline-block ${
+                      webhookStatus?.webhookSecretConfigured
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : 'text-amber-600 dark:text-amber-400'
+                    }`}
+                  >
+                    {webhookStatus === null
+                      ? 'Checking...'
+                      : webhookStatus.webhookSecretConfigured
+                      ? 'Configured'
+                      : 'Not Set'}
+                  </span>
+                </div>
+                <div className="rounded-xl border border-slate-200 dark:border-zinc-800 p-3">
+                  <span className="text-slate-500 dark:text-zinc-400 block text-[11px]">
+                    Buffered / Unsynced SMS
+                  </span>
+                  <span className="font-mono font-bold text-slate-900 dark:text-zinc-100 mt-0.5 inline-block">
+                    {webhookStatus
+                      ? `${webhookStatus.bufferedReceiptsCount} / ${webhookStatus.unsyncedCount}`
+                      : '—'}
+                  </span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void syncSmsQueueAndMatch()}
+                disabled={syncingSms}
+                className="w-full h-10 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-zinc-100 dark:hover:bg-zinc-200 text-white dark:text-zinc-900 text-xs font-semibold inline-flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-4 h-4 ${syncingSms ? 'animate-spin' : ''}`} />
+                <span>
+                  {syncingSms ? 'Syncing & Matching...' : 'Sync Server SMS & Auto-Match Orders'}
+                </span>
+              </button>
+
+              {syncSummary && (
+                <p className="text-xs font-mono text-teal-700 dark:text-teal-400 bg-teal-50 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-900/50 rounded-lg px-3 py-2">
+                  {syncSummary}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Orders & License Management Table */}
+          <div className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-zinc-800 flex flex-wrap items-center justify-between gap-3">
+              <h3 className="font-display text-base font-bold text-slate-900 dark:text-zinc-50 flex items-center gap-2">
+                <KeyRound className="w-4 h-4 text-teal-700 dark:text-teal-400" />
+                Orders &amp; Generated Licenses ({orders.length})
+              </h3>
+              <div className="flex flex-wrap gap-1.5 text-xs">
+                {(['all', 'provisional', 'verified', 'payment_required', 'revoked'] as const).map(
+                  (f) => (
+                    <button
+                      key={f}
+                      type="button"
+                      onClick={() => setOrderFilter(f)}
+                      className={`px-2.5 py-1 rounded-lg font-medium capitalize cursor-pointer ${
+                        orderFilter === f
+                          ? 'bg-teal-700 text-white'
+                          : 'bg-slate-100 dark:bg-zinc-800 text-slate-600 dark:text-zinc-300'
+                      }`}
+                    >
+                      {f.replace('_', ' ')}
+                    </button>
+                  )
+                )}
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-zinc-800 text-xs font-medium text-slate-500 dark:text-zinc-400">
+                    <th className="py-3 px-4">Customer</th>
+                    <th className="py-3 px-4">Software &amp; Plan</th>
+                    <th className="py-3 px-4">Payment &amp; TrxID</th>
+                    <th className="py-3 px-4">License Key</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-zinc-800/80">
+                  {orders
+                    .filter((o) => orderFilter === 'all' || o.status === orderFilter)
+                    .map((ord) => {
+                      const lic = licenses.find((l) => l.orderId === ord.orderId);
+                      const sym = ord.currency === 'BDT' ? '৳' : '$';
+                      return (
+                        <tr key={ord.id} className="hover:bg-slate-50/70 dark:hover:bg-zinc-800/40">
+                          <td className="py-3 px-4">
+                            <div className="font-semibold text-slate-900 dark:text-zinc-100">
+                              {ord.customerName}
+                            </div>
+                            <div className="text-xs text-slate-500 dark:text-zinc-400">
+                              {ord.customerEmail}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="font-medium text-slate-900 dark:text-zinc-100">
+                              {ord.softwareName}
+                            </div>
+                            <div className="text-xs font-mono text-slate-500 dark:text-zinc-400">
+                              {ord.planName || 'Standard'} · {sym}{ord.amount}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 font-mono text-xs">
+                            <div className="uppercase font-bold text-slate-800 dark:text-zinc-200">
+                              {ord.paymentMethod}: {ord.trxId}
+                            </div>
+                            <div className="text-slate-500 dark:text-zinc-400">
+                              From: {ord.senderPhone}
+                            </div>
+                            {lic?.resubmittedTrxId && (
+                              <div className="text-amber-600 dark:text-amber-400 font-semibold">
+                                Resubmitted: {lic.resubmittedTrxId}
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 font-mono text-xs font-semibold text-teal-700 dark:text-teal-300">
+                            {ord.licenseKey || '—'}
+                          </td>
+                          <td className="py-3 px-4">
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold capitalize ${
+                                ord.status === 'verified'
+                                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+                                  : ord.status === 'provisional'
+                                  ? 'bg-sky-500/15 text-sky-700 dark:text-sky-300'
+                                  : ord.status === 'payment_required'
+                                  ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
+                                  : 'bg-red-500/15 text-red-700 dark:text-red-400'
+                              }`}
+                            >
+                              {ord.status.replace('_', ' ')}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <div className="inline-flex items-center gap-1">
+                              {ord.status !== 'verified' && (
+                                <button
+                                  type="button"
+                                  onClick={() => void handleUpdateOrderStatus(ord, 'verified')}
+                                  className="p-1.5 rounded-lg text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 cursor-pointer"
+                                  title="Approve / Verify License"
+                                >
+                                  <ShieldCheck className="w-4 h-4" />
+                                </button>
+                              )}
+                              {ord.status !== 'payment_required' && (
+                                <button
+                                  type="button"
+                                  onClick={() => void handleUpdateOrderStatus(ord, 'payment_required')}
+                                  className="p-1.5 rounded-lg text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30 cursor-pointer"
+                                  title="Lock License (Payment Required)"
+                                >
+                                  <Lock className="w-4 h-4" />
+                                </button>
+                              )}
+                              {ord.status === 'payment_required' && (
+                                <button
+                                  type="button"
+                                  onClick={() => void handleUpdateOrderStatus(ord, 'verified')}
+                                  className="p-1.5 rounded-lg text-teal-700 dark:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-950/30 cursor-pointer"
+                                  title="Unlock License"
+                                >
+                                  <Unlock className="w-4 h-4" />
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => void handleDeleteOrderAndLicense(ord)}
+                                className="p-1.5 rounded-lg text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 cursor-pointer"
+                                title={t.admin.delete}
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  {orders.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-xs text-slate-400">
+                        No orders recorded yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Synced SMS Inbox Table */}
+          <div className="rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-zinc-800">
+              <h3 className="font-display text-base font-bold text-slate-900 dark:text-zinc-50">
+                Received bKash / Nagad SMS Log ({smsList.length})
+              </h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-zinc-800 text-xs font-medium text-slate-500 dark:text-zinc-400">
+                    <th className="py-3 px-4">Provider</th>
+                    <th className="py-3 px-4">TrxID</th>
+                    <th className="py-3 px-4">Amount</th>
+                    <th className="py-3 px-4">Sender Phone</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4">Matched Key</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-zinc-800/80">
+                  {smsList.map((sms) => (
+                    <tr key={sms.id}>
+                      <td className="py-2.5 px-4 uppercase font-bold text-xs text-slate-800 dark:text-zinc-200">
+                        {sms.provider}
+                      </td>
+                      <td className="py-2.5 px-4 font-mono text-xs font-semibold text-slate-900 dark:text-zinc-100">
+                        {sms.trxId}
+                      </td>
+                      <td className="py-2.5 px-4 font-mono text-xs tabular-nums">৳{sms.amount}</td>
+                      <td className="py-2.5 px-4 font-mono text-xs text-slate-500 dark:text-zinc-400">
+                        {sms.senderPhone || '—'}
+                      </td>
+                      <td className="py-2.5 px-4">
+                        <span
+                          className={`text-xs font-semibold capitalize ${
+                            sms.status === 'matched'
+                              ? 'text-emerald-600 dark:text-emerald-400'
+                              : 'text-slate-500 dark:text-zinc-400'
+                          }`}
+                        >
+                          {sms.status}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-4 font-mono text-xs text-teal-700 dark:text-teal-400">
+                        {sms.matchedLicenseKey || '—'}
+                      </td>
+                    </tr>
+                  ))}
+                  {smsList.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-xs text-slate-400">
+                        No SMS receipts synced yet. Forwarded SMS from Android will appear here.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1436,7 +2344,7 @@ export function AdminPage() {
               </h2>
               <button
                 type="button"
-                onClick={() => setShowSoftwareModal(false)}
+                onClick={closeSoftwareModal}
                 className="p-2 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200"
               >
                 <X className="w-5 h-5" />
@@ -1553,16 +2461,243 @@ export function AdminPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-slate-600 dark:text-zinc-400">Price ($)</label>
+                  <label className="text-xs font-medium text-slate-600 dark:text-zinc-400">
+                    Base Price ({softwareForm.currency})
+                  </label>
                   <input
                     type="number"
                     min="0"
                     step="0.01"
-                    value={softwareForm.price}
+                    disabled={softwareForm.pricingMode === 'free'}
+                    value={softwareForm.pricingMode === 'free' ? 0 : softwareForm.price}
                     onChange={(e) => setSoftwareForm({ ...softwareForm, price: Number(e.target.value) })}
-                    className="mt-1 w-full h-10 px-3 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 text-sm font-mono"
+                    className="mt-1 w-full h-10 px-3 rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 text-sm font-mono disabled:opacity-50"
                   />
                 </div>
+              </div>
+
+              {/* Pricing Mode, Currency, License & Subscription Packages Builder */}
+              <div className="space-y-3 rounded-xl border border-slate-200 dark:border-zinc-800 p-4 bg-slate-50/70 dark:bg-zinc-950/60">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-slate-600 dark:text-zinc-400">
+                      Pricing Model
+                    </label>
+                    <select
+                      value={softwareForm.pricingMode}
+                      onChange={(e) => {
+                        const mode = e.target.value as SoftwarePricingMode;
+                        setSoftwareForm({
+                          ...softwareForm,
+                          pricingMode: mode,
+                          generateLicenseKey: mode !== 'free',
+                        });
+                      }}
+                      className="mt-1 w-full h-10 px-2.5 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs font-medium"
+                    >
+                      <option value="free">100% Free Download</option>
+                      <option value="paid_download">Paid Before Download</option>
+                      <option value="freemium_license">Free Download + Paid In-App License</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-slate-600 dark:text-zinc-400">
+                      Currency
+                    </label>
+                    <select
+                      value={softwareForm.currency}
+                      onChange={(e) =>
+                        setSoftwareForm({ ...softwareForm, currency: e.target.value as CurrencyCode })
+                      }
+                      className="mt-1 w-full h-10 px-2.5 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs font-mono"
+                    >
+                      <option value="BDT">BDT (৳)</option>
+                      <option value="USD">USD ($)</option>
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-xs font-medium text-slate-600 dark:text-zinc-400">
+                        Grace (Hrs)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="168"
+                        step="0.5"
+                        value={softwareForm.gracePeriodHours}
+                        onChange={(e) =>
+                          setSoftwareForm({
+                            ...softwareForm,
+                            gracePeriodHours: Number(e.target.value),
+                          })
+                        }
+                        className="mt-1 w-full h-10 px-2.5 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-slate-600 dark:text-zinc-400">
+                        Max Devices
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="50"
+                        value={softwareForm.maxDevices}
+                        onChange={(e) =>
+                          setSoftwareForm({
+                            ...softwareForm,
+                            maxDevices: Number(e.target.value),
+                          })
+                        }
+                        className="mt-1 w-full h-10 px-2.5 rounded-xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs font-mono"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {softwareForm.pricingMode !== 'free' && (
+                  <div className="space-y-2.5 pt-2 border-t border-slate-200 dark:border-zinc-800">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-slate-700 dark:text-zinc-300">
+                        Subscription Packages ({softwareForm.plans.length}/8)
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {[
+                          { label: '+ 1 Year', name: '1 Year Pro', days: 365, price: 499 },
+                          { label: '+ 2 Years', name: '2 Years Pro', days: 730, price: 899 },
+                          { label: '+ Lifetime', name: 'Lifetime License', days: 0, price: 1499 },
+                        ].map((preset) => (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            disabled={softwareForm.plans.length >= 8}
+                            onClick={() =>
+                              setSoftwareForm((prev) => ({
+                                ...prev,
+                                plans: [
+                                  ...prev.plans,
+                                  {
+                                    id: `plan_${Date.now()}_${prev.plans.length + 1}`,
+                                    name: preset.name,
+                                    durationDays: preset.days,
+                                    price: preset.price,
+                                    badge: preset.days === 0 ? 'Best Value' : '',
+                                    description: '',
+                                  },
+                                ],
+                              }))
+                            }
+                            className="px-2.5 py-1 rounded-lg bg-slate-200/80 dark:bg-zinc-800 text-[11px] font-semibold text-slate-800 dark:text-zinc-200 hover:bg-teal-600 hover:text-white transition-colors cursor-pointer disabled:opacity-40"
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          disabled={softwareForm.plans.length >= 8}
+                          onClick={() =>
+                            setSoftwareForm((prev) => ({
+                              ...prev,
+                              plans: [
+                                ...prev.plans,
+                                {
+                                  id: `plan_${Date.now()}_${prev.plans.length + 1}`,
+                                  name: 'Custom Plan',
+                                  durationDays: 365,
+                                  price: 300,
+                                  badge: '',
+                                  description: '',
+                                },
+                              ],
+                            }))
+                          }
+                          className="px-2.5 py-1 rounded-lg bg-teal-700 text-white text-[11px] font-semibold cursor-pointer disabled:opacity-40"
+                        >
+                          + Custom
+                        </button>
+                      </div>
+                    </div>
+
+                    {softwareForm.plans.length === 0 ? (
+                      <p className="text-[11px] text-slate-500 dark:text-zinc-400">
+                        No package tiers added yet. Uses Base Price above, or click preset buttons to add 1 Year / 2 Years / Lifetime plans.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {softwareForm.plans.map((plan, idx) => (
+                          <div
+                            key={plan.id}
+                            className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-2.5"
+                          >
+                            <input
+                              type="text"
+                              value={plan.name}
+                              onChange={(e) => {
+                                const next = [...softwareForm.plans];
+                                next[idx] = { ...plan, name: e.target.value };
+                                setSoftwareForm({ ...softwareForm, plans: next });
+                              }}
+                              placeholder="Plan Name (e.g. 1 Year)"
+                              className="sm:col-span-4 h-8 px-2.5 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 text-xs"
+                            />
+                            <input
+                              type="number"
+                              min="0"
+                              value={plan.durationDays}
+                              onChange={(e) => {
+                                const next = [...softwareForm.plans];
+                                next[idx] = { ...plan, durationDays: Number(e.target.value) };
+                                setSoftwareForm({ ...softwareForm, plans: next });
+                              }}
+                              placeholder="Days (0=Lifetime)"
+                              title="Duration in Days (0 = Lifetime)"
+                              className="sm:col-span-3 h-8 px-2.5 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 text-xs font-mono"
+                            />
+                            <input
+                              type="number"
+                              min="0"
+                              value={plan.price}
+                              onChange={(e) => {
+                                const next = [...softwareForm.plans];
+                                next[idx] = { ...plan, price: Number(e.target.value) };
+                                setSoftwareForm({ ...softwareForm, plans: next });
+                              }}
+                              placeholder="Price"
+                              className="sm:col-span-2 h-8 px-2.5 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 text-xs font-mono"
+                            />
+                            <input
+                              type="text"
+                              value={plan.badge || ''}
+                              onChange={(e) => {
+                                const next = [...softwareForm.plans];
+                                next[idx] = { ...plan, badge: e.target.value };
+                                setSoftwareForm({ ...softwareForm, plans: next });
+                              }}
+                              placeholder="Badge"
+                              className="sm:col-span-2 h-8 px-2 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 text-xs"
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSoftwareForm({
+                                  ...softwareForm,
+                                  plans: softwareForm.plans.filter((_, i) => i !== idx),
+                                })
+                              }
+                              className="sm:col-span-1 h-8 flex items-center justify-center rounded-lg text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 cursor-pointer"
+                              aria-label="Remove plan"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1805,7 +2940,7 @@ export function AdminPage() {
               <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-200 dark:border-zinc-800">
                 <button
                   type="button"
-                  onClick={() => setShowSoftwareModal(false)}
+                  onClick={closeSoftwareModal}
                   className="h-10 px-4 rounded-xl border border-slate-200 dark:border-zinc-700 text-xs font-semibold"
                 >
                   {t.admin.cancel}

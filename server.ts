@@ -1,4 +1,6 @@
 import express from 'express';
+import rateLimit from 'express-rate-limit';
+import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -424,13 +426,456 @@ async function getOrCreateRelease(owner: string, repo: string, tag: string, toke
   return (await createRes.json()) as { id: number; upload_url: string; assets?: Array<{ id: number; browser_download_url: string }> };
 }
 
+async function requireAdminMiddleware(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  const authCheck = await verifyAdminToken(req.headers.authorization);
+  if (!authCheck.ok) {
+    return res.status(403).json({ error: authCheck.error });
+  }
+  return next();
+}
+
+// ---------------------------------------------------------------------------
+// Automated bKash / Nagad SMS Inbox & License Verification Helpers
+// ---------------------------------------------------------------------------
+interface StoredSmsReceipt {
+  trxId: string;
+  provider: 'bkash' | 'nagad';
+  sender: string;
+  amount: number;
+  senderPhone: string;
+  rawMessage: string;
+  receivedAtMs: number;
+  matchedOrderId?: string;
+  matchedLicenseKey?: string;
+  status: 'unused' | 'matched' | 'ignored';
+  syncedToFirestore?: boolean;
+}
+
+interface SmsStateStore {
+  receipts: Record<string, StoredSmsReceipt>;
+  verifiedKeys: Record<string, { trxId: string; amount: number; matchedAtMs: number }>;
+}
+
+const SMS_STATE_PATH = '/tmp/toolpotro-sms-state.json';
+let smsStateMemory: SmsStateStore | null = null;
+
+function loadSmsState(): SmsStateStore {
+  if (smsStateMemory) return smsStateMemory;
+  try {
+    if (fs.existsSync(SMS_STATE_PATH)) {
+      const parsed = JSON.parse(fs.readFileSync(SMS_STATE_PATH, 'utf-8')) as Partial<SmsStateStore>;
+      smsStateMemory = {
+        receipts: parsed.receipts && typeof parsed.receipts === 'object' ? parsed.receipts : {},
+        verifiedKeys:
+          parsed.verifiedKeys && typeof parsed.verifiedKeys === 'object' ? parsed.verifiedKeys : {},
+      };
+      return smsStateMemory;
+    }
+  } catch {
+    // Fallback to empty state
+  }
+  smsStateMemory = { receipts: {}, verifiedKeys: {} };
+  return smsStateMemory;
+}
+
+function saveSmsState(state: SmsStateStore) {
+  smsStateMemory = state;
+  // Prune to latest 500 receipts to keep memory tiny
+  const keys = Object.keys(state.receipts);
+  if (keys.length > 500) {
+    keys
+      .sort((a, b) => (state.receipts[a]?.receivedAtMs || 0) - (state.receipts[b]?.receivedAtMs || 0))
+      .slice(0, keys.length - 500)
+      .forEach((oldKey) => delete state.receipts[oldKey]);
+  }
+  try {
+    fs.writeFileSync(SMS_STATE_PATH, JSON.stringify(state), 'utf-8');
+  } catch {
+    // Non-fatal on read-only environments
+  }
+}
+
+interface ServiceAccountCreds {
+  client_email: string;
+  private_key: string;
+  token_uri?: string;
+}
+
+let cachedSaToken: { token: string; expiresAtMs: number } | null = null;
+
+function parseServiceAccountCreds(): ServiceAccountCreds | null {
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<ServiceAccountCreds>;
+    if (parsed.client_email && parsed.private_key) {
+      return {
+        client_email: parsed.client_email,
+        private_key: parsed.private_key.replace(/\\n/g, '\n'),
+        token_uri: parsed.token_uri || 'https://oauth2.googleapis.com/token',
+      };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+async function getFirebaseAdminAccessToken(): Promise<string | null> {
+  const creds = parseServiceAccountCreds();
+  if (!creds) return null;
+  const now = Date.now();
+  if (cachedSaToken && cachedSaToken.expiresAtMs > now + 60_000) {
+    return cachedSaToken.token;
+  }
+  try {
+    const iat = Math.floor(now / 1000);
+    const exp = iat + 3500;
+    const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
+    const claimSet = Buffer.from(
+      JSON.stringify({
+        iss: creds.client_email,
+        scope: 'https://www.googleapis.com/auth/datastore',
+        aud: creds.token_uri || 'https://oauth2.googleapis.com/token',
+        exp,
+        iat,
+      })
+    ).toString('base64url');
+    const unsigned = `${header}.${claimSet}`;
+    const signature = crypto.createSign('RSA-SHA256').update(unsigned).sign(creds.private_key, 'base64url');
+    const jwt = `${unsigned}.${signature}`;
+
+    const resp = await fetch(creds.token_uri || 'https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+        assertion: jwt,
+      }),
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as { access_token?: string; expires_in?: number };
+    if (data.access_token) {
+      cachedSaToken = {
+        token: data.access_token,
+        expiresAtMs: now + (data.expires_in || 3600) * 1000,
+      };
+      return data.access_token;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+interface FirestoreLicenseDoc {
+  licenseKey: string;
+  orderId: string;
+  softwareId: string;
+  softwareName: string;
+  planName: string;
+  durationDays: number;
+  currency: string;
+  amount: number;
+  trxId: string;
+  resubmittedTrxId?: string;
+  status: 'provisional' | 'verified' | 'payment_required' | 'revoked';
+  graceUntilMs: number;
+  expiresAtMs: number;
+  maxDevices: number;
+  boundDevices: string[];
+}
+
+async function fetchLicenseDoc(licenseKey: string): Promise<FirestoreLicenseDoc | null> {
+  if (!/^[A-Z0-9-]{8,64}$/.test(licenseKey)) return null;
+  const cfg = getFirebasePublicConfig();
+  if (!cfg.apiKey || !cfg.projectId) return null;
+
+  try {
+    const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+      cfg.projectId
+    )}/databases/${encodeURIComponent(cfg.databaseId)}/documents/licenses/${encodeURIComponent(
+      licenseKey
+    )}?key=${encodeURIComponent(cfg.apiKey)}`;
+    const resp = await fetch(endpoint, { signal: AbortSignal.timeout(3000) });
+    if (!resp.ok) return null;
+    const json = (await resp.json()) as {
+      fields?: Record<
+        string,
+        {
+          stringValue?: string;
+          integerValue?: string;
+          doubleValue?: number;
+          arrayValue?: { values?: Array<{ stringValue?: string }> };
+        }
+      >;
+    };
+    const f = json.fields;
+    if (!f) return null;
+    const statusRaw = f.status?.stringValue || 'provisional';
+    const status = (
+      ['provisional', 'verified', 'payment_required', 'revoked'].includes(statusRaw)
+        ? statusRaw
+        : 'provisional'
+    ) as FirestoreLicenseDoc['status'];
+
+    return {
+      licenseKey: f.licenseKey?.stringValue || licenseKey,
+      orderId: f.orderId?.stringValue || '',
+      softwareId: f.softwareId?.stringValue || '',
+      softwareName: f.softwareName?.stringValue || 'Toolpotro Software',
+      planName: f.planName?.stringValue || 'Standard',
+      durationDays: Number(f.durationDays?.integerValue ?? 0),
+      currency: f.currency?.stringValue || 'BDT',
+      amount: Number(f.amount?.doubleValue ?? f.amount?.integerValue ?? 0),
+      trxId: (f.trxId?.stringValue || '').toUpperCase().trim(),
+      resubmittedTrxId: (f.resubmittedTrxId?.stringValue || '').toUpperCase().trim() || undefined,
+      status,
+      graceUntilMs: Number(f.graceUntilMs?.integerValue ?? 0),
+      expiresAtMs: Number(f.expiresAtMs?.integerValue ?? 0),
+      maxDevices: Math.max(1, Number(f.maxDevices?.integerValue ?? 1)),
+      boundDevices: (f.boundDevices?.arrayValue?.values || [])
+        .map((v) => v.stringValue || '')
+        .filter(Boolean),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function persistSmsAndVerifyViaServiceAccount(
+  receipt: StoredSmsReceipt
+): Promise<void> {
+  const token = await getFirebaseAdminAccessToken();
+  if (!token) return;
+  const cfg = getFirebasePublicConfig();
+  if (!cfg.projectId) return;
+
+  const baseUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+    cfg.projectId
+  )}/databases/${encodeURIComponent(cfg.databaseId)}/documents`;
+
+  const nowIso = new Date().toISOString();
+
+  // Check if any license already uses this trxId via structuredQuery
+  let matchedLicenseKey = receipt.matchedLicenseKey || '';
+  let matchedOrderId = receipt.matchedOrderId || '';
+  let smsStatus: 'unused' | 'matched' = receipt.status === 'matched' ? 'matched' : 'unused';
+
+  try {
+    const queryRes = await fetch(`${baseUrl}:runQuery`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: 'licenses' }],
+          where: {
+            fieldFilter: {
+              field: { fieldPath: 'trxId' },
+              op: 'EQUAL',
+              value: { stringValue: receipt.trxId },
+            },
+          },
+          limit: 5,
+        },
+      }),
+      signal: AbortSignal.timeout(3500),
+    });
+
+    if (queryRes.ok) {
+      const rows = (await queryRes.json()) as Array<{
+        document?: {
+          name?: string;
+          fields?: Record<
+            string,
+            { stringValue?: string; integerValue?: string; doubleValue?: number }
+          >;
+        };
+      }>;
+      for (const row of rows) {
+        const docFields = row.document?.fields;
+        if (!docFields) continue;
+        const licAmount = Number(docFields.amount?.doubleValue ?? docFields.amount?.integerValue ?? 0);
+        const licStatus = docFields.status?.stringValue || '';
+        const licKey = docFields.licenseKey?.stringValue || row.document?.name?.split('/').pop() || '';
+        const ordId = docFields.orderId?.stringValue || '';
+        if (licKey && receipt.amount >= licAmount && (licStatus === 'provisional' || licStatus === 'payment_required')) {
+          // Promote license and order to verified
+          await fetch(
+            `${baseUrl}/licenses/${encodeURIComponent(licKey)}?updateMask.fieldPaths=status&updateMask.fieldPaths=updatedAt`,
+            {
+              method: 'PATCH',
+              headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                fields: {
+                  status: { stringValue: 'verified' },
+                  updatedAt: { timestampValue: nowIso },
+                },
+              }),
+            }
+          ).catch(() => {});
+
+          if (ordId) {
+            await fetch(
+              `${baseUrl}/orders/${encodeURIComponent(ordId)}?updateMask.fieldPaths=status&updateMask.fieldPaths=updatedAt`,
+              {
+                method: 'PATCH',
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  fields: {
+                    status: { stringValue: 'verified' },
+                    updatedAt: { timestampValue: nowIso },
+                  },
+                }),
+              }
+            ).catch(() => {});
+          }
+
+          matchedLicenseKey = licKey;
+          matchedOrderId = ordId;
+          smsStatus = 'matched';
+          break;
+        }
+      }
+    }
+
+    // Upsert smsTransactions/{trxId}
+    const safeDocId = receipt.trxId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    await fetch(`${baseUrl}/smsTransactions/${encodeURIComponent(safeDocId)}`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        fields: {
+          trxId: { stringValue: receipt.trxId },
+          provider: { stringValue: receipt.provider },
+          sender: { stringValue: receipt.sender },
+          amount: { doubleValue: receipt.amount },
+          senderPhone: { stringValue: receipt.senderPhone },
+          rawMessage: { stringValue: receipt.rawMessage.slice(0, 1000) },
+          receivedAtMs: { integerValue: String(Math.floor(receipt.receivedAtMs)) },
+          matchedOrderId: { stringValue: matchedOrderId },
+          matchedLicenseKey: { stringValue: matchedLicenseKey },
+          status: { stringValue: smsStatus },
+          createdAt: { timestampValue: nowIso },
+          updatedAt: { timestampValue: nowIso },
+        },
+      }),
+      signal: AbortSignal.timeout(3500),
+    });
+
+    receipt.matchedLicenseKey = matchedLicenseKey || undefined;
+    receipt.matchedOrderId = matchedOrderId || undefined;
+    receipt.status = smsStatus;
+    receipt.syncedToFirestore = true;
+  } catch {
+    // Non-fatal: remains buffered in server state for Admin sync
+  }
+}
+
+async function promoteLicenseViaServiceAccount(licenseKey: string, orderId: string) {
+  const token = await getFirebaseAdminAccessToken();
+  if (!token) return;
+  const cfg = getFirebasePublicConfig();
+  if (!cfg.projectId) return;
+  const baseUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+    cfg.projectId
+  )}/databases/${encodeURIComponent(cfg.databaseId)}/documents`;
+  const nowIso = new Date().toISOString();
+
+  await fetch(
+    `${baseUrl}/licenses/${encodeURIComponent(licenseKey)}?updateMask.fieldPaths=status&updateMask.fieldPaths=updatedAt`,
+    {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fields: { status: { stringValue: 'verified' }, updatedAt: { timestampValue: nowIso } },
+      }),
+    }
+  ).catch(() => {});
+
+  if (orderId) {
+    await fetch(
+      `${baseUrl}/orders/${encodeURIComponent(orderId)}?updateMask.fieldPaths=status&updateMask.fieldPaths=updatedAt`,
+      {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fields: { status: { stringValue: 'verified' }, updatedAt: { timestampValue: nowIso } },
+        }),
+      }
+    ).catch(() => {});
+  }
+}
+
+function timingSafeEqualString(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 async function startServer() {
   const app = express();
+  app.set('trust proxy', 1);
+  app.disable('x-powered-by');
   const PORT = Number(process.env.PORT || 3000);
   const isProd = process.env.NODE_ENV === 'production';
 
+  const healthLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 120,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+  });
+
+  const publicApiLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 60,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { error: 'Too many requests. Please slow down and try again shortly.' },
+  });
+
+  const adminApiLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 30,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { error: 'Too many admin API requests. Please wait a minute before retrying.' },
+  });
+
+  const pageLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 120,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    skip: (req) =>
+      /\.(js|mjs|css|png|jpg|jpeg|gif|webp|svg|ico|woff2?|map|json)$/i.test(req.path) ||
+      req.path.startsWith('/@') ||
+      req.path.startsWith('/src/') ||
+      req.path.startsWith('/node_modules/'),
+    message: 'Too many requests. Please try again in a minute.',
+  });
+
   // Render Free Tier Keep-Alive & Health Check Endpoint
-  app.get('/api/health', (_req, res) => {
+  app.get('/api/health', healthLimiter, (_req, res) => {
     res.status(200).json({
       status: 'ok',
       service: 'toolpotro',
@@ -438,8 +883,351 @@ async function startServer() {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // Automated bKash / Nagad SMS Webhook & License Verification Endpoints
+  // -------------------------------------------------------------------------
+  app.get('/api/payments/webhook-status', adminApiLimiter, requireAdminMiddleware, (_req, res) => {
+    const state = loadSmsState();
+    const unsyncedCount = Object.values(state.receipts).filter((r) => !r.syncedToFirestore).length;
+    res.json({
+      webhookSecretConfigured: Boolean(process.env.SMS_WEBHOOK_SECRET?.trim()),
+      firebaseAdminConfigured: Boolean(parseServiceAccountCreds()),
+      bufferedReceiptsCount: Object.keys(state.receipts).length,
+      unsyncedCount,
+    });
+  });
+
+  app.post(
+    '/api/payments/sms-webhook',
+    publicApiLimiter,
+    express.json({ limit: '16kb' }),
+    async (req, res) => {
+      const configuredSecret = process.env.SMS_WEBHOOK_SECRET?.trim() || '';
+      if (!configuredSecret) {
+        return res.status(503).json({
+          error: 'SMS_WEBHOOK_SECRET is not configured on the server environment.',
+        });
+      }
+
+      const incomingSecret = String(req.headers['x-webhook-secret'] || '').trim();
+      if (!incomingSecret || !timingSafeEqualString(incomingSecret, configuredSecret)) {
+        return res.status(403).json({ error: 'Invalid X-Webhook-Secret' });
+      }
+
+      if (req.body?.isTest === true) {
+        return res.status(200).json({
+          ok: true,
+          test: true,
+          message: 'Toolpotro PaySync webhook connected successfully.',
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const providerRaw = String(req.body?.provider || '').trim().toLowerCase();
+      const provider: 'bkash' | 'nagad' | null =
+        providerRaw === 'bkash' ? 'bkash' : providerRaw === 'nagad' ? 'nagad' : null;
+      const trxId = String(req.body?.trxId || '')
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9_-]/g, '');
+      const amount = Number(req.body?.amount);
+
+      if (!provider || !trxId || trxId.length < 4 || !Number.isFinite(amount) || amount <= 0) {
+        return res.status(400).json({ error: 'Invalid SMS transaction payload' });
+      }
+
+      const state = loadSmsState();
+      const existingReceipt = state.receipts[trxId];
+      if (existingReceipt) {
+        return res.status(200).json({
+          ok: true,
+          duplicate: true,
+          trxId,
+          status: existingReceipt.status,
+        });
+      }
+
+      const receipt: StoredSmsReceipt = {
+        trxId,
+        provider,
+        sender: String(req.body?.sender || provider).slice(0, 40),
+        amount,
+        senderPhone: String(req.body?.senderPhone || '').trim().slice(0, 40),
+        rawMessage: String(req.body?.rawMessage || '').slice(0, 1000),
+        receivedAtMs: Number(req.body?.receivedAt) || Date.now(),
+        status: 'unused',
+        syncedToFirestore: false,
+      };
+
+      state.receipts[trxId] = receipt;
+      await persistSmsAndVerifyViaServiceAccount(receipt);
+      saveSmsState(state);
+
+      return res.status(200).json({
+        ok: true,
+        trxId: receipt.trxId,
+        status: receipt.status,
+      });
+    }
+  );
+
+  // Admin-only endpoint to fetch buffered SMS receipts & verified keys for Firestore sync
+  app.get('/api/payments/sms-queue', adminApiLimiter, requireAdminMiddleware, (_req, res) => {
+    const state = loadSmsState();
+    res.json({
+      receipts: Object.values(state.receipts).sort((a, b) => b.receivedAtMs - a.receivedAtMs),
+      verifiedKeys: state.verifiedKeys,
+    });
+  });
+
+  app.post(
+    '/api/payments/sms-queue/ack',
+    adminApiLimiter,
+    requireAdminMiddleware,
+    express.json({ limit: '64kb' }),
+    (req, res) => {
+      const trxIds = Array.isArray(req.body?.trxIds) ? req.body.trxIds : [];
+      const state = loadSmsState();
+      let updated = 0;
+      for (const rawId of trxIds) {
+        const id = String(rawId || '').trim().toUpperCase();
+        if (state.receipts[id]) {
+          state.receipts[id].syncedToFirestore = true;
+          updated += 1;
+        }
+      }
+      saveSmsState(state);
+      res.json({ ok: true, updated });
+    }
+  );
+
+  // Public instant check: matches a submitted TrxID against server-buffered bKash/Nagad SMS receipts
+  app.post(
+    '/api/payments/match-trx',
+    publicApiLimiter,
+    express.json({ limit: '16kb' }),
+    async (req, res) => {
+      const trxId = String(req.body?.trxId || '')
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9_-]/g, '');
+      const licenseKey = String(req.body?.licenseKey || '').trim().toUpperCase();
+      const orderId = String(req.body?.orderId || '').trim();
+      const expectedAmount = Number(req.body?.amount ?? 0);
+
+      if (!trxId) {
+        return res.json({ matched: false });
+      }
+
+      const state = loadSmsState();
+      const receipt = state.receipts[trxId];
+      if (!receipt) {
+        return res.json({ matched: false });
+      }
+
+      if (
+        receipt.status === 'matched' &&
+        receipt.matchedLicenseKey &&
+        licenseKey &&
+        receipt.matchedLicenseKey !== licenseKey
+      ) {
+        return res.json({ matched: false, reason: 'already_used' });
+      }
+
+      if (receipt.amount + 0.01 < expectedAmount) {
+        return res.json({ matched: false, reason: 'insufficient_amount' });
+      }
+
+      receipt.status = 'matched';
+      if (orderId) receipt.matchedOrderId = orderId;
+      if (licenseKey) {
+        receipt.matchedLicenseKey = licenseKey;
+        state.verifiedKeys[licenseKey] = {
+          trxId,
+          amount: receipt.amount,
+          matchedAtMs: Date.now(),
+        };
+      }
+      receipt.syncedToFirestore = false;
+      saveSmsState(state);
+
+      if (licenseKey) {
+        void promoteLicenseViaServiceAccount(licenseKey, orderId);
+      }
+
+      return res.json({
+        matched: true,
+        trxId,
+        amount: receipt.amount,
+        provider: receipt.provider,
+      });
+    }
+  );
+
+  // Public In-App License Verification API (for Windows .exe, Android .apk, Chrome extensions & /license page)
+  app.options('/api/license/verify', (_req, res) => {
+    res
+      .set('Access-Control-Allow-Origin', '*')
+      .set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+      .set('Access-Control-Allow-Headers', 'Content-Type')
+      .status(204)
+      .end();
+  });
+
+  const handleLicenseVerify = async (req: express.Request, res: express.Response) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    const rawKey = String(req.query.key || req.body?.key || '')
+      .trim()
+      .toUpperCase();
+    const deviceId = String(req.query.deviceId || req.body?.deviceId || '')
+      .trim()
+      .slice(0, 120);
+
+    const origin = resolveRequestOrigin(req) || 'https://toolpotro.onrender.com';
+
+    if (!rawKey || !/^[A-Z0-9-]{8,64}$/.test(rawKey)) {
+      return res.status(400).json({
+        valid: false,
+        status: 'invalid_key',
+        message: 'Invalid license key format.',
+      });
+    }
+
+    const lic = await fetchLicenseDoc(rawKey);
+    if (!lic) {
+      return res.status(404).json({
+        valid: false,
+        status: 'not_found',
+        message: 'License key not found.',
+      });
+    }
+
+    const fixUrl = `${origin}/license?key=${encodeURIComponent(rawKey)}`;
+    const buyUrl = `${origin}/software/${encodeURIComponent(lic.softwareId)}?buy=license`;
+    const now = Date.now();
+
+    if (lic.status === 'revoked') {
+      return res.json({
+        valid: false,
+        status: 'revoked',
+        softwareId: lic.softwareId,
+        softwareName: lic.softwareName,
+        planName: lic.planName,
+        fixUrl,
+        buyUrl,
+        message: 'This license key has been revoked.',
+      });
+    }
+
+    if (lic.expiresAtMs > 0 && now > lic.expiresAtMs) {
+      return res.json({
+        valid: false,
+        status: 'expired',
+        softwareId: lic.softwareId,
+        softwareName: lic.softwareName,
+        planName: lic.planName,
+        expiresAtMs: lic.expiresAtMs,
+        buyUrl,
+        fixUrl,
+        message: 'Subscription period has expired. Please renew.',
+      });
+    }
+
+    // Check server-side SMS state in case SMS arrived or was matched before Admin synced Firestore
+    const state = loadSmsState();
+    let effectiveStatus = lic.status;
+
+    if (effectiveStatus !== 'verified') {
+      if (state.verifiedKeys[rawKey]) {
+        effectiveStatus = 'verified';
+      } else {
+        const candidateTrx = (lic.resubmittedTrxId || lic.trxId || '').toUpperCase().trim();
+        const smsMatch = candidateTrx ? state.receipts[candidateTrx] : undefined;
+        if (
+          smsMatch &&
+          smsMatch.amount + 0.01 >= lic.amount &&
+          (!smsMatch.matchedLicenseKey || smsMatch.matchedLicenseKey === rawKey)
+        ) {
+          smsMatch.status = 'matched';
+          smsMatch.matchedLicenseKey = rawKey;
+          smsMatch.matchedOrderId = lic.orderId;
+          smsMatch.syncedToFirestore = false;
+          state.verifiedKeys[rawKey] = {
+            trxId: smsMatch.trxId,
+            amount: smsMatch.amount,
+            matchedAtMs: now,
+          };
+          saveSmsState(state);
+          effectiveStatus = 'verified';
+          void promoteLicenseViaServiceAccount(rawKey, lic.orderId);
+        }
+      }
+    }
+
+    if (effectiveStatus === 'payment_required') {
+      return res.json({
+        valid: false,
+        status: 'payment_required',
+        softwareId: lic.softwareId,
+        softwareName: lic.softwareName,
+        planName: lic.planName,
+        fixUrl,
+        buyUrl,
+        message: 'Payment could not be verified. Please submit valid bKash/Nagad payment.',
+      });
+    }
+
+    if (effectiveStatus === 'provisional' && lic.graceUntilMs > 0 && now > lic.graceUntilMs) {
+      return res.json({
+        valid: false,
+        status: 'payment_required',
+        softwareId: lic.softwareId,
+        softwareName: lic.softwareName,
+        planName: lic.planName,
+        graceEnded: true,
+        fixUrl,
+        buyUrl,
+        message: 'Verification grace window ended without matching payment. Please complete payment.',
+      });
+    }
+
+    if (
+      deviceId &&
+      lic.boundDevices.length >= lic.maxDevices &&
+      !lic.boundDevices.includes(deviceId)
+    ) {
+      return res.json({
+        valid: false,
+        status: 'device_limit_reached',
+        softwareId: lic.softwareId,
+        softwareName: lic.softwareName,
+        planName: lic.planName,
+        maxDevices: lic.maxDevices,
+        fixUrl,
+        buyUrl,
+        message: `Device limit reached (${lic.maxDevices} device allowed).`,
+      });
+    }
+
+    return res.json({
+      valid: true,
+      status: effectiveStatus,
+      softwareId: lic.softwareId,
+      softwareName: lic.softwareName,
+      planName: lic.planName,
+      expiresAtMs: lic.expiresAtMs,
+      graceUntilMs: lic.graceUntilMs,
+      maxDevices: lic.maxDevices,
+      fixUrl,
+      buyUrl,
+    });
+  };
+
+  app.get('/api/license/verify', publicApiLimiter, handleLicenseVerify);
+  app.post('/api/license/verify', publicApiLimiter, express.json({ limit: '8kb' }), handleLicenseVerify);
+
   // Check if GitHub Releases storage is configured on server
-  app.get('/api/github/status', (_req, res) => {
+  app.get('/api/github/status', publicApiLimiter, (_req, res) => {
     const cfg = getGitHubConfig();
     res.json({
       configured: cfg.configured,
@@ -448,16 +1236,13 @@ async function startServer() {
     });
   });
 
-  // Upload binary file directly to GitHub Releases (Admin Only)
+  // Upload binary file directly to GitHub Releases (Admin Only; verifies auth BEFORE buffering body)
   app.post(
     '/api/github/upload',
+    adminApiLimiter,
+    requireAdminMiddleware,
     express.raw({ type: 'application/octet-stream', limit: '500mb' }),
     async (req, res) => {
-      const authCheck = await verifyAdminToken(req.headers.authorization);
-      if (!authCheck.ok) {
-        return res.status(403).json({ error: authCheck.error });
-      }
-
       const cfg = getGitHubConfig();
       if (!cfg.configured) {
         return res.status(400).json({
@@ -518,60 +1303,105 @@ async function startServer() {
     }
   );
 
-  // Delete matching GitHub Release assets when software is deleted (Admin Only)
-  app.delete('/api/github/asset', express.json(), async (req, res) => {
-    const authCheck = await verifyAdminToken(req.headers.authorization);
-    if (!authCheck.ok) {
-      return res.status(403).json({ error: authCheck.error });
-    }
+  // Delete matching GitHub Release assets when software, images, or banners are replaced or deleted (Admin Only)
+  app.delete(
+    '/api/github/asset',
+    adminApiLimiter,
+    requireAdminMiddleware,
+    express.json({ limit: '64kb' }),
+    async (req, res) => {
+      const cfg = getGitHubConfig();
+      if (!cfg.configured) {
+        return res.status(200).json({ skipped: true });
+      }
 
-    const cfg = getGitHubConfig();
-    if (!cfg.configured) {
-      return res.status(200).json({ skipped: true });
-    }
+      const candidateInputs: unknown[] = [
+        req.body?.downloadUrl,
+        req.body?.thumbnailUrl,
+        ...(Array.isArray(req.body?.urls) ? req.body.urls : []),
+      ];
 
-    const urls = [req.body?.downloadUrl, req.body?.thumbnailUrl].filter(
-      (u): u is string => typeof u === 'string' && u.includes('github.com/')
-    );
+      const targetUrls = Array.from(
+        new Set(
+          candidateInputs
+            .filter((u): u is string => typeof u === 'string')
+            .map((u) => u.trim())
+            .filter((u) => u.includes('github.com/'))
+        )
+      ).slice(0, 50);
 
-    if (urls.length === 0) {
-      return res.status(200).json({ deleted: 0 });
-    }
+      if (targetUrls.length === 0) {
+        return res.status(200).json({ deleted: 0 });
+      }
 
-    try {
-      const release = await getOrCreateRelease(cfg.owner, cfg.repo, cfg.tag, cfg.token);
-      const assets = release.assets || [];
-      let deleted = 0;
+      const targetSet = new Set(targetUrls);
 
-      for (const asset of assets) {
-        if (urls.includes(asset.browser_download_url)) {
+      try {
+        const release = await getOrCreateRelease(cfg.owner, cfg.repo, cfg.tag, cfg.token);
+        const ghHeaders = {
+          Authorization: `Bearer ${cfg.token}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'User-Agent': 'Toolpotro-Distribution-Server',
+        };
+
+        const matchingAssetIds: number[] = [];
+        for (let page = 1; page <= 5; page += 1) {
+          const listRes = await fetch(
+            `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/releases/${release.id}/assets?per_page=100&page=${page}`,
+            { headers: ghHeaders }
+          );
+          if (!listRes.ok) {
+            // Fallback to release.assets from initial response if paginated endpoint fails
+            if (page === 1 && Array.isArray(release.assets)) {
+              for (const asset of release.assets) {
+                if (targetSet.has(asset.browser_download_url)) {
+                  matchingAssetIds.push(asset.id);
+                }
+              }
+            }
+            break;
+          }
+          const pageAssets = (await listRes.json()) as Array<{
+            id: number;
+            browser_download_url: string;
+          }>;
+          for (const asset of pageAssets) {
+            if (targetSet.has(asset.browser_download_url)) {
+              matchingAssetIds.push(asset.id);
+              targetSet.delete(asset.browser_download_url);
+            }
+          }
+          if (targetSet.size === 0 || pageAssets.length < 100) {
+            break;
+          }
+        }
+
+        let deleted = 0;
+        for (const assetId of matchingAssetIds) {
           const delRes = await fetch(
-            `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/releases/assets/${asset.id}`,
+            `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/releases/assets/${assetId}`,
             {
               method: 'DELETE',
-              headers: {
-                Authorization: `Bearer ${cfg.token}`,
-                Accept: 'application/vnd.github+json',
-                'User-Agent': 'Toolpotro-Distribution-Server',
-              },
+              headers: ghHeaders,
             }
           );
           if (delRes.ok || delRes.status === 204) {
             deleted += 1;
           }
         }
-      }
 
-      return res.status(200).json({ deleted });
-    } catch (err) {
-      return res.status(500).json({
-        error: err instanceof Error ? err.message : 'Failed to delete GitHub asset',
-      });
+        return res.status(200).json({ deleted });
+      } catch (err) {
+        return res.status(500).json({
+          error: err instanceof Error ? err.message : 'Failed to delete GitHub asset',
+        });
+      }
     }
-  });
+  );
 
   // Social Link Preview Thumbnail Proxy for individual software pages (no 302 redirects for WhatsApp/Meta bots)
-  app.get('/api/og-thumbnail/:id', async (req, res) => {
+  app.get('/api/og-thumbnail/:id', publicApiLimiter, async (req, res) => {
     const sendFallback = () => {
       const fallbackPath = resolveFallbackOgImagePath();
       if (fallbackPath) {
@@ -662,7 +1492,7 @@ async function startServer() {
   });
 
   // Dynamic robots.txt for Googlebot & AI Search Crawlers
-  app.get('/robots.txt', (req, res) => {
+  app.get('/robots.txt', pageLimiter, (req, res) => {
     const origin = resolveRequestOrigin(req);
     const lines = [
       'User-agent: *',
@@ -676,7 +1506,7 @@ async function startServer() {
   });
 
   // Dynamic XML Sitemap of all active software pages + platform directories
-  app.get('/sitemap.xml', async (req, res) => {
+  app.get('/sitemap.xml', pageLimiter, async (req, res) => {
     const origin = resolveRequestOrigin(req) || 'https://toolpotro.onrender.com';
     const items = await fetchAllActiveSoftwareForSeo();
     const today = new Date().toISOString().slice(0, 10);
@@ -730,7 +1560,7 @@ ${xmlEntries}
       : '';
 
     app.use(express.static(distPath, { maxAge: '1d', index: false }));
-    app.get('*', async (req, res) => {
+    app.get('*', pageLimiter, async (req, res) => {
       if (!cachedHtml) {
         return res.sendFile(indexHtmlPath);
       }

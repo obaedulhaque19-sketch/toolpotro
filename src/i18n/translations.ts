@@ -33,6 +33,8 @@ export interface Translations {
     emptyTitle: string;
     emptySubtitle: string;
     freeLabel: string;
+    freemiumLabel: string;
+    fromPricePrefix: string;
     downloadsLabel: string;
     viewDetails: string;
     noSearchResults: string;
@@ -47,6 +49,9 @@ export interface Translations {
     totalDownloads: string;
     fileFormat: string;
     directDownload: string;
+    downloadFreeVersion: string;
+    buyAndDownload: string;
+    buyLicense: string;
     downloading: string;
     downloadStarted: string;
     zeroSpamNote: string;
@@ -71,6 +76,47 @@ export interface Translations {
     finalPrice: string;
     notFoundTitle: string;
     notFoundSubtitle: string;
+    plansTitle: string;
+    plansSubtitle: string;
+    lifetimeLabel: string;
+    daysLabel: string;
+    checkoutTitle: string;
+    checkoutSubtitle: string;
+    paymentMethodLabel: string;
+    sendMoneyInstruction: string;
+    copyNumber: string;
+    copied: string;
+    customerNameLabel: string;
+    customerEmailLabel: string;
+    senderPhoneLabel: string;
+    trxIdLabel: string;
+    submitCheckout: string;
+    submittingCheckout: string;
+    orderSuccessTitle: string;
+    orderVerifiedBadge: string;
+    orderProvisionalBadge: string;
+    licenseKeyLabel: string;
+    graceNote: string;
+    checkLicenseStatus: string;
+  };
+  licensePage: {
+    title: string;
+    subtitle: string;
+    keyPlaceholder: string;
+    checkBtn: string;
+    checking: string;
+    notFound: string;
+    statusVerified: string;
+    statusProvisional: string;
+    statusLocked: string;
+    statusExpired: string;
+    statusRevoked: string;
+    resubmitTitle: string;
+    resubmitSubtitle: string;
+    resubmitBtn: string;
+    resubmitSuccessMatched: string;
+    resubmitSuccessPending: string;
+    buyNewPlan: string;
   };
   admin: {
     title: string;
@@ -93,6 +139,7 @@ export interface Translations {
     };
     tabs: {
       software: string;
+      payments: string;
       coupons: string;
       analytics: string;
       heroBanner: string;
@@ -180,6 +227,8 @@ export const translations: Record<Language, Translations> = {
       emptySubtitle:
         'Sign in to the Admin console to publish your first desktop program, Android APK, or browser extension.',
       freeLabel: 'Free',
+      freemiumLabel: 'Free + Pro',
+      fromPricePrefix: 'From',
       downloadsLabel: 'downloads',
       viewDetails: 'View & Download',
       noSearchResults: 'No packages match your current search or platform filter.',
@@ -194,6 +243,9 @@ export const translations: Record<Language, Translations> = {
       totalDownloads: 'Total Downloads',
       fileFormat: 'Package Type',
       directDownload: 'Direct Download',
+      downloadFreeVersion: 'Download Free Version',
+      buyAndDownload: 'Pay & Download Now',
+      buyLicense: 'Buy License Key',
       downloading: 'Preparing download...',
       downloadStarted: 'Download started — thank you for using Toolpotro.',
       zeroSpamNote: 'Direct link · Zero redirects or bundled installers',
@@ -241,6 +293,47 @@ export const translations: Record<Language, Translations> = {
       finalPrice: 'Final Price',
       notFoundTitle: 'Package not found',
       notFoundSubtitle: 'This software item may have been archived or removed.',
+      plansTitle: 'Choose Subscription Package',
+      plansSubtitle: 'Select a license duration to unlock full features',
+      lifetimeLabel: 'Lifetime',
+      daysLabel: 'Days',
+      checkoutTitle: 'Complete Payment & Unlock',
+      checkoutSubtitle: 'Send Money via bKash or Nagad, then submit your details for instant access.',
+      paymentMethodLabel: 'Select Payment Method',
+      sendMoneyInstruction: 'Send Money (Personal) exact amount to this number:',
+      copyNumber: 'Copy Number',
+      copied: 'Copied!',
+      customerNameLabel: 'Your Full Name',
+      customerEmailLabel: 'Email / Gmail Address',
+      senderPhoneLabel: 'Sender bKash / Nagad Number',
+      trxIdLabel: 'Transaction ID (TrxID)',
+      submitCheckout: 'Submit & Unlock Access',
+      submittingCheckout: 'Processing...',
+      orderSuccessTitle: 'Access Granted!',
+      orderVerifiedBadge: 'Payment Verified Automatically',
+      orderProvisionalBadge: 'Active (Verification Pending)',
+      licenseKeyLabel: 'Your License Key',
+      graceNote: 'Your access is active immediately. Automated SMS verification runs in the background.',
+      checkLicenseStatus: 'Check License Status',
+    },
+    licensePage: {
+      title: 'License Key Verification & Unlock',
+      subtitle: 'Check your Toolpotro license status or resubmit a valid bKash / Nagad TrxID to unlock.',
+      keyPlaceholder: 'Enter License Key (e.g. TP-XXXX-XXXX-XXXX)',
+      checkBtn: 'Check Status',
+      checking: 'Checking...',
+      notFound: 'License key not found. Please verify the spelling.',
+      statusVerified: 'Verified & Active',
+      statusProvisional: 'Provisional Access (Verification Pending)',
+      statusLocked: 'Payment Verification Required',
+      statusExpired: 'Subscription Expired',
+      statusRevoked: 'License Revoked',
+      resubmitTitle: 'Submit / Update Payment TrxID',
+      resubmitSubtitle: 'If your previous TrxID had a typo or payment did not match, send the amount via bKash/Nagad and enter your valid TrxID below.',
+      resubmitBtn: 'Verify & Unlock License',
+      resubmitSuccessMatched: 'Payment matched! Your license is now fully verified and unlocked.',
+      resubmitSuccessPending: 'TrxID updated. Automated verification or Admin review will unlock it shortly.',
+      buyNewPlan: 'Purchase New Subscription',
     },
     admin: {
       title: 'Toolpotro Admin Console',
@@ -263,6 +356,7 @@ export const translations: Record<Language, Translations> = {
       },
       tabs: {
         software: 'Software & Apps',
+        payments: 'Payments & Licenses',
         coupons: 'Coupon Codes',
         analytics: 'Download Analytics',
         heroBanner: 'Hero Banner',
@@ -381,6 +475,8 @@ export const translations: Record<Language, Translations> = {
       emptySubtitle:
         'আপনার প্রথম ডেস্কটপ প্রোগ্রাম, অ্যান্ড্রয়েড APK বা এক্সটেনশন প্রকাশ করতে অ্যাডমিন কনসোলে সাইন ইন করুন।',
       freeLabel: 'ফ্রি',
+      freemiumLabel: 'ফ্রি + প্রো',
+      fromPricePrefix: 'শুরু',
       downloadsLabel: 'ডাউনলোড',
       viewDetails: 'বিস্তারিত ও ডাউনলোড',
       noSearchResults: 'আপনার খোঁজা বা ফিল্টারের সাথে কোনো সফটওয়্যার মেলেনি।',
@@ -395,6 +491,9 @@ export const translations: Record<Language, Translations> = {
       totalDownloads: 'মোট ডাউনলোড',
       fileFormat: 'ফাইল ফরম্যাট',
       directDownload: 'সরাসরি ডাউনলোড করুন',
+      downloadFreeVersion: 'ফ্রি ভার্সন ডাউনলোড করুন',
+      buyAndDownload: 'পেমেন্ট করে ডাউনলোড করুন',
+      buyLicense: 'লাইসেন্স / প্যাকেজ কিনুন',
       downloading: 'ডাউনলোড প্রস্তুত হচ্ছে...',
       downloadStarted: 'ডাউনলোড শুরু হয়েছে — টুলপত্র ব্যবহার করার জন্য ধন্যবাদ।',
       zeroSpamNote: 'সরাসরি লিংক · কোনো স্প্যাম বা অতিরিক্ত অ্যাডওয়্যার নেই',
@@ -442,6 +541,47 @@ export const translations: Record<Language, Translations> = {
       finalPrice: 'চূড়ান্ত মূল্য',
       notFoundTitle: 'সফটওয়্যারটি পাওয়া যায়নি',
       notFoundSubtitle: 'এই আইটেমটি আর্কাইভ বা মুছে ফেলা হয়ে থাকতে পারে।',
+      plansTitle: 'সাবস্ক্রিপশন প্যাকেজ বেছে নিন',
+      plansSubtitle: 'সম্পূর্ণ ফিচার আনলক করতে পছন্দের মেয়াদ সিলেক্ট করুন',
+      lifetimeLabel: 'লাইফটাইম',
+      daysLabel: 'দিন',
+      checkoutTitle: 'পেমেন্ট সম্পন্ন ও আনলক করুন',
+      checkoutSubtitle: 'বিকাশ বা নগদ থেকে Send Money করে নিচের তথ্য সাবমিট করলেই সাথে সাথে অ্যাক্সেস পাবেন।',
+      paymentMethodLabel: 'পেমেন্ট মাধ্যম বেছে নিন',
+      sendMoneyInstruction: 'এই পার্সোনাল নাম্বারে ঠিক নির্ধারিত টাকা Send Money করুন:',
+      copyNumber: 'নাম্বার কপি করুন',
+      copied: 'কপি হয়েছে!',
+      customerNameLabel: 'আপনার নাম',
+      customerEmailLabel: 'জিমেইল / ইমেইল ঠিকানা',
+      senderPhoneLabel: 'যে নাম্বার থেকে টাকা পাঠিয়েছেন',
+      trxIdLabel: 'ট্রানজেকশন আইডি (TrxID)',
+      submitCheckout: 'সাবমিট করুন ও অ্যাক্সেস নিন',
+      submittingCheckout: 'প্রসেস হচ্ছে...',
+      orderSuccessTitle: 'অ্যাক্সেস চালু হয়েছে!',
+      orderVerifiedBadge: 'পেমেন্ট অটোমেটিক ভেরিফায়েড',
+      orderProvisionalBadge: 'সাময়িকভাবে চালু (ভেরিফিকেশন চলমান)',
+      licenseKeyLabel: 'আপনার লাইসেন্স কী (License Key)',
+      graceNote: 'আপনার ডাউনলোড/লাইসেন্স এখনই ব্যবহার করা যাবে। ব্যাকগ্রাউন্ডে SMS ভেরিফিকেশন সম্পন্ন হবে।',
+      checkLicenseStatus: 'লাইসেন্স স্ট্যাটাস দেখুন',
+    },
+    licensePage: {
+      title: 'লাইসেন্স কী যাচাই ও আনলক',
+      subtitle: 'আপনার Toolpotro লাইসেন্সের অবস্থা দেখুন অথবা সঠিক বিকাশ/নগদ TrxID দিয়ে আনলক করুন।',
+      keyPlaceholder: 'লাইসেন্স কী লিখুন (যেমন TP-XXXX-XXXX-XXXX)',
+      checkBtn: 'যাচাই করুন',
+      checking: 'খোঁজা হচ্ছে...',
+      notFound: 'লাইসেন্স কী খুঁজে পাওয়া যায়নি। বানান মিলিয়ে দেখুন।',
+      statusVerified: 'ভেরিফায়েড ও সক্রিয়',
+      statusProvisional: 'সাময়িক অ্যাক্সেস (ভেরিফিকেশন চলমান)',
+      statusLocked: 'পেমেন্ট ভেরিফিকেশন প্রয়োজন (লকড)',
+      statusExpired: 'মেয়াদ শেষ হয়েছে',
+      statusRevoked: 'লাইসেন্স বাতিল করা হয়েছে',
+      resubmitTitle: 'সঠিক TrxID সাবমিট / আপডেট করুন',
+      resubmitSubtitle: 'আগের TrxID-তে ভুল হয়ে থাকলে বিকাশ/নগদে পেমেন্ট করে সঠিক TrxID ও নাম্বার নিচে দিন।',
+      resubmitBtn: 'যাচাই ও আনলক করুন',
+      resubmitSuccessMatched: 'পেমেন্ট মিলে গেছে! আপনার লাইসেন্স সম্পূর্ণ ভেরিফায়েড ও আনলক হয়েছে।',
+      resubmitSuccessPending: 'নতুন TrxID জমা হয়েছে। SMS ম্যাচ বা অ্যাডমিন যাচাইয়ের পর আনলক হয়ে যাবে।',
+      buyNewPlan: 'নতুন প্যাকেজ কিনুন',
     },
     admin: {
       title: 'টুলপত্র অ্যাডমিন কনসোল',
@@ -464,6 +604,7 @@ export const translations: Record<Language, Translations> = {
       },
       tabs: {
         software: 'সফটওয়্যার ও অ্যাপ',
+        payments: 'পেমেন্ট ও লাইসেন্স',
         coupons: 'কুপন কোড',
         analytics: 'ডাউনলোড অ্যানালিটিক্স',
         heroBanner: 'হিরো ব্যানার',
@@ -582,6 +723,8 @@ export const translations: Record<Language, Translations> = {
       emptySubtitle:
         'अपना पहला डेस्कटॉप प्रोग्राम, एंड्रॉइड APK या एक्सटेंशन जोड़ने के लिए एडमिन कंसोल में साइन इन करें।',
       freeLabel: 'निःशुल्क',
+      freemiumLabel: 'फ़्री + प्रो',
+      fromPricePrefix: 'शुरुआत',
       downloadsLabel: 'डाउनलोड',
       viewDetails: 'विवरण और डाउनलोड',
       noSearchResults: 'आपकी खोज या फ़िल्टर से कोई पैकेज मेल नहीं खाता।',
@@ -596,6 +739,9 @@ export const translations: Record<Language, Translations> = {
       totalDownloads: 'कुल डाउनलोड',
       fileFormat: 'पैकेज प्रकार',
       directDownload: 'डायरेक्ट डाउनलोड',
+      downloadFreeVersion: 'फ़्री वर्ज़न डाउनलोड करें',
+      buyAndDownload: 'भुगतान करें और डाउनलोड करें',
+      buyLicense: 'लाइसेंस / पैकेज खरीदें',
       downloading: 'डाउनलोड तैयार हो रहा है...',
       downloadStarted: 'डाउनलोड शुरू हो गया — Toolpotro उपयोग करने के लिए धन्यवाद।',
       zeroSpamNote: 'सीधा लिंक · कोई स्पैम या अतिरिक्त इंस्टॉलर नहीं',
@@ -643,6 +789,47 @@ export const translations: Record<Language, Translations> = {
       finalPrice: 'अंतिम मूल्य',
       notFoundTitle: 'पैकेज नहीं मिला',
       notFoundSubtitle: 'यह सॉफ़्टवेयर आइटम संग्रहीत या हटाया जा सकता है।',
+      plansTitle: 'सब्सक्रिप्शन पैकेज चुनें',
+      plansSubtitle: 'सभी प्रो फ़ीचर अनलॉक करने के लिए अवधि चुनें',
+      lifetimeLabel: 'लाइफ़टाइम',
+      daysLabel: 'दिन',
+      checkoutTitle: 'भुगतान और अनलॉक करें',
+      checkoutSubtitle: 'bKash या Nagad से Send Money करें और तुरंत एक्सेस के लिए विवरण सबमिट करें।',
+      paymentMethodLabel: 'भुगतान माध्यम चुनें',
+      sendMoneyInstruction: 'इस नंबर पर सटीक राशि Send Money करें:',
+      copyNumber: 'नंबर कॉपी करें',
+      copied: 'कॉपी हो गया!',
+      customerNameLabel: 'आपका पूरा नाम',
+      customerEmailLabel: 'ईमेल / Gmail पता',
+      senderPhoneLabel: 'भेजने वाले का bKash / Nagad नंबर',
+      trxIdLabel: 'ट्रांजैक्शन आईडी (TrxID)',
+      submitCheckout: 'सबमिट करें और अनलॉक करें',
+      submittingCheckout: 'प्रक्रिया जारी...',
+      orderSuccessTitle: 'एक्सेस सक्रिय हो गया!',
+      orderVerifiedBadge: 'भुगतान स्वतः सत्यापित हो गया',
+      orderProvisionalBadge: 'सक्रिय (सत्यापन प्रतीक्षित)',
+      licenseKeyLabel: 'आपकी लाइसेंस कुंजी (License Key)',
+      graceNote: 'आपका एक्सेस तुरंत सक्रिय है। बैकग्राउंड में SMS सत्यापन पूरा किया जाएगा।',
+      checkLicenseStatus: 'लाइसेंस स्थिति जांचें',
+    },
+    licensePage: {
+      title: 'लाइसेंस कुंजी सत्यापन और अनलॉक',
+      subtitle: 'अपनी Toolpotro लाइसेंस स्थिति जांचें या मान्य bKash / Nagad TrxID सबमिट करें।',
+      keyPlaceholder: 'लाइसेंस कुंजी दर्ज करें (जैसे TP-XXXX-XXXX-XXXX)',
+      checkBtn: 'जांचें',
+      checking: 'जांच हो रही है...',
+      notFound: 'लाइसेंस कुंजी नहीं मिली। कृपया सही कुंजी दर्ज करें।',
+      statusVerified: 'सत्यापित और सक्रिय',
+      statusProvisional: 'अस्थायी एक्सेस (सत्यापन प्रतीक्षित)',
+      statusLocked: 'भुगतान सत्यापन आवश्यक (लॉक्ड)',
+      statusExpired: 'सदस्यता समाप्त हो गई',
+      statusRevoked: 'लाइसेंस रद्द किया गया',
+      resubmitTitle: 'मान्य TrxID अपडेट / सबमिट करें',
+      resubmitSubtitle: 'यदि पिछला TrxID गलत था, तो bKash/Nagad से भुगतान करके नीचे सही TrxID दर्ज करें।',
+      resubmitBtn: 'सत्यापित और अनलॉक करें',
+      resubmitSuccessMatched: 'भुगतान मिल गया! आपका लाइसेंस सत्यापित और अनलॉक हो गया है।',
+      resubmitSuccessPending: 'TrxID अपडेट हो गया। SMS मिलान या एडमिन समीक्षा के बाद अनलॉक हो जाएगा।',
+      buyNewPlan: 'नया पैकेज खरीदें',
     },
     admin: {
       title: 'Toolpotro एडमिन कंसोल',
@@ -665,6 +852,7 @@ export const translations: Record<Language, Translations> = {
       },
       tabs: {
         software: 'सॉफ़्टवेयर और ऐप्स',
+        payments: 'भुगतान और लाइसेंस',
         coupons: 'कूपन कोड',
         analytics: 'डाउनलोड एनालिटिक्स',
         heroBanner: 'हीरो बैनर',
