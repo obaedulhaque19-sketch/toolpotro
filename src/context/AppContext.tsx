@@ -32,13 +32,12 @@ const AppContext = createContext<AppContextValue | undefined>(undefined);
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [language, setLanguageState] = useState<Language>(() => {
     const saved = localStorage.getItem('toolpotro_lang');
-    return saved === 'bn' || saved === 'hi' ? saved : 'en';
+    return saved === 'en' || saved === 'hi' || saved === 'bn' ? saved : 'bn';
   });
 
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = localStorage.getItem('toolpotro_theme');
-    if (saved === 'dark' || saved === 'light') return saved;
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    return saved === 'dark' || saved === 'light' ? saved : 'light';
   });
 
   const [user, setUser] = useState<User | null>(null);

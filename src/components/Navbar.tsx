@@ -38,7 +38,7 @@ export function Navbar() {
           : 'sticky top-0 z-40 border-b border-teal-900/15 dark:border-teal-500/20 bg-[#cbe4de]/90 dark:bg-[#051418]/92 backdrop-blur-md'
       }
     >
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-8">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2 sm:gap-8">
         {/* Zone 1: Brand Logo */}
         <Link
           to="/"
@@ -48,7 +48,7 @@ export function Navbar() {
           <img
             src="/assets/aistudio/image_2e281797.png"
             alt="Toolpotro"
-            className="h-8 sm:h-9 w-auto object-contain dark:invert dark:hue-rotate-180 dark:brightness-110"
+            className="h-7 sm:h-9 w-auto object-contain dark:invert dark:hue-rotate-180 dark:brightness-110"
             referrerPolicy="no-referrer"
           />
         </Link>
@@ -75,9 +75,9 @@ export function Navbar() {
         </nav>
 
         {/* Zone 3: Language Switcher & Theme Toggle */}
-        <div className="flex items-center gap-2.5 shrink-0">
+        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
           <div
-            className={`hidden sm:flex items-center p-0.5 rounded-lg border ${
+            className={`flex items-center p-0.5 rounded-lg border ${
               isAdminRoute
                 ? 'bg-slate-100 dark:bg-zinc-900 border-slate-200/70 dark:border-zinc-800'
                 : 'bg-[#b8dbd2]/80 dark:bg-[#092026] border-teal-900/15 dark:border-teal-500/20'
@@ -86,7 +86,7 @@ export function Navbar() {
             aria-label="Language selector"
           >
             <Globe
-              className={`w-3.5 h-3.5 ml-2 mr-1 ${
+              className={`hidden sm:block w-3.5 h-3.5 ml-2 mr-1 ${
                 isAdminRoute
                   ? 'text-slate-500 dark:text-zinc-400'
                   : 'text-[#184549] dark:text-teal-300/80'
@@ -97,7 +97,7 @@ export function Navbar() {
                 key={lang.code}
                 type="button"
                 onClick={() => setLanguage(lang.code)}
-                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                className={`px-1.5 sm:px-2.5 py-1 text-[11px] sm:text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                   isAdminRoute
                     ? language === lang.code
                       ? 'bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-50 shadow-xs'
@@ -116,7 +116,7 @@ export function Navbar() {
             type="button"
             onClick={toggleTheme}
             aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-            className={`h-10 w-10 flex items-center justify-center rounded-lg border transition-colors shrink-0 cursor-pointer ${
+            className={`h-9 w-9 sm:h-10 sm:w-10 flex items-center justify-center rounded-lg border transition-colors shrink-0 cursor-pointer ${
               isAdminRoute
                 ? 'border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800'
                 : 'border-teal-900/15 dark:border-teal-500/20 bg-[#eaf6f3] dark:bg-[#092026] text-[#062326] dark:text-[#2ee6b8] hover:bg-white dark:hover:bg-[#0d2c34]'
@@ -129,7 +129,7 @@ export function Navbar() {
             type="button"
             onClick={() => setMobileOpen((prev) => !prev)}
             aria-label="Toggle navigation menu"
-            className={`md:hidden h-11 w-11 flex items-center justify-center rounded-lg border cursor-pointer ${
+            className={`md:hidden h-9 w-9 sm:h-10 sm:w-10 flex items-center justify-center rounded-lg border cursor-pointer ${
               isAdminRoute
                 ? 'border-slate-200 dark:border-zinc-800 text-slate-700 dark:text-zinc-300'
                 : 'border-teal-900/15 dark:border-teal-500/20 text-[#062326] dark:text-teal-100'
@@ -167,33 +167,6 @@ export function Navbar() {
               >
                 {link.label}
               </Link>
-            ))}
-          </div>
-
-          <div
-            className={`pt-2 border-t flex items-center gap-1.5 ${
-              isAdminRoute
-                ? 'border-slate-200 dark:border-zinc-800'
-                : 'border-teal-900/15 dark:border-teal-500/20'
-            }`}
-          >
-            {LANGUAGES.map((lang) => (
-              <button
-                key={lang.code}
-                type="button"
-                onClick={() => setLanguage(lang.code)}
-                className={`flex-1 py-2 text-xs font-medium rounded-lg border cursor-pointer ${
-                  isAdminRoute
-                    ? language === lang.code
-                      ? 'bg-slate-900 dark:bg-zinc-100 text-white dark:text-zinc-900 border-transparent'
-                      : 'border-slate-200 dark:border-zinc-800 text-slate-600 dark:text-zinc-400'
-                    : language === lang.code
-                    ? 'bg-[#07262a] text-[#2ee6b8] dark:bg-[#10d9a0] dark:text-slate-950 border-transparent font-semibold'
-                    : 'border-teal-900/15 dark:border-teal-500/20 text-[#184549] dark:text-teal-100/80'
-                }`}
-              >
-                {lang.label}
-              </button>
             ))}
           </div>
         </div>
