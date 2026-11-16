@@ -154,6 +154,8 @@
         "durationDays": { "type": "integer" },
         "currency": { "type": "string", "enum": ["USD", "BDT"] },
         "amount": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["bkash", "nagad", "free"] },
+        "senderPhone": { "type": "string", "maxLength": 30 },
         "trxId": { "type": "string", "minLength": 2, "maxLength": 60 },
         "status": { "type": "string", "enum": ["provisional", "verified", "payment_required", "revoked"] },
         "graceUntilMs": { "type": "integer" },
@@ -162,6 +164,7 @@
         "boundDevices": { "type": "array" },
         "resubmittedTrxId": { "type": "string", "maxLength": 60 },
         "resubmittedPhone": { "type": "string", "maxLength": 30 },
+        "resubmittedPaymentMethod": { "type": "string", "enum": ["bkash", "nagad", "free"] },
         "resubmittedAtMs": { "type": "integer" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }

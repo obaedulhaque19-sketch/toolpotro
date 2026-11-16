@@ -14,9 +14,11 @@ import {
 import {
   AlertCircle,
   Archive,
+  Ban,
   BarChart3,
   Check,
   CheckCircle2,
+  Clock,
   Copy,
   CreditCard,
   Download,
@@ -141,12 +143,15 @@ export function AdminPage() {
   const [webhookStatus, setWebhookStatus] = useState<{
     webhookSecretConfigured: boolean;
     firebaseAdminConfigured: boolean;
+    lastFirestoreSyncError?: string | null;
     bufferedReceiptsCount: number;
     unsyncedCount: number;
   } | null>(null);
   const [syncingSms, setSyncingSms] = useState(false);
   const [syncSummary, setSyncSummary] = useState<string | null>(null);
   const [copiedWebhook, setCopiedWebhook] = useState(false);
+  const [pendingDeleteOrder, setPendingDeleteOrder] = useState<PaymentOrder | null>(null);
+  const [deletingOrder, setDeletingOrder] = useState(false);
 
   // Software Modal State
   const [showSoftwareModal, setShowSoftwareModal] = useState(false);
@@ -514,6 +519,7 @@ export function AdminPage() {
         const data = (await resp.json()) as {
           webhookSecretConfigured: boolean;
           firebaseAdminConfigured: boolean;
+          lastFirestoreSyncError?: string | null;
           bufferedReceiptsCount: number;
           unsyncedCount: number;
         };
@@ -523,6 +529,13 @@ export function AdminPage() {
       // Ignore network hiccup
     }
   }, [user, isAdmin]);
+
+  const normalizeBdPhone = (phone: string) => {
+    const digits = String(phone || '').replace(/\D/g, '');
+    if (digits.startsWith('880') && digits.length === 13) return digits.slice(2);
+    if (digits.startsWith('1') && digits.length === 10) return `0${digits}`;
+    return digits;
+  };
 
   const syncSmsQueueAndMatch = useCallback(async () => {
     if (!user || !isAdmin || syncingSms) return;
@@ -562,12 +575,13 @@ export function AdminPage() {
 
       // 1. Write new buffered SMS receipts into Firestore smsTransactions
       for (const r of incomingReceipts) {
-        const cleanTrx = r.trxId.toUpperCase().replace(/[^A-Z0-9_-]/g, '_');
+        const upperTrx = r.trxId.toUpperCase().trim();
+        const cleanTrx = upperTrx.replace(/[^A-Z0-9_-]/g, '_');
         if (!cleanTrx) continue;
-        const existing = existingSmsMap.get(r.trxId.toUpperCase());
+        const existing = existingSmsMap.get(upperTrx);
         if (!existing) {
           await setDoc(doc(db, 'smsTransactions', cleanTrx), {
-            trxId: r.trxId.toUpperCase(),
+            trxId: upperTrx,
             provider: r.provider,
             sender: r.sender || r.provider,
             amount: Number(r.amount) || 0,
@@ -598,21 +612,64 @@ export function AdminPage() {
         });
       }
 
-      // 2. Auto-match any pending licenses/orders against unused SMS receipts (checking both Firestore & fresh queue)
-      const combinedSms = new Map<string, { trxId: string; amount: number; status: string }>();
+      // 2. Build unified SMS map without letting buffered 'unused' entries overwrite authoritative Firestore 'matched'/'ignored' status
+      type UnifiedSms = {
+        trxId: string;
+        provider: 'bkash' | 'nagad';
+        senderPhone: string;
+        amount: number;
+        status: 'unused' | 'matched' | 'ignored';
+        matchedOrderId?: string;
+        matchedLicenseKey?: string;
+      };
+      const combinedSms = new Map<string, UnifiedSms>();
       for (const s of smsList) {
-        combinedSms.set(s.trxId.toUpperCase(), {
-          trxId: s.trxId.toUpperCase(),
+        const key = s.trxId.toUpperCase().trim();
+        combinedSms.set(key, {
+          trxId: key,
+          provider: s.provider,
+          senderPhone: s.senderPhone || '',
           amount: Number(s.amount),
           status: s.status,
+          matchedOrderId: s.matchedOrderId,
+          matchedLicenseKey: s.matchedLicenseKey,
         });
       }
       for (const r of incomingReceipts) {
-        combinedSms.set(r.trxId.toUpperCase(), {
-          trxId: r.trxId.toUpperCase(),
-          amount: Number(r.amount),
-          status: r.status,
-        });
+        const key = r.trxId.toUpperCase().trim();
+        const prev = combinedSms.get(key);
+        if (!prev || (prev.status === 'unused' && r.status === 'matched')) {
+          combinedSms.set(key, {
+            trxId: key,
+            provider: r.provider,
+            senderPhone: r.senderPhone || '',
+            amount: Number(r.amount),
+            status: r.status || 'unused',
+            matchedOrderId: r.matchedOrderId,
+            matchedLicenseKey: r.matchedLicenseKey,
+          });
+        }
+      }
+
+      // Track every TrxID already claimed by any matched SMS or verified order/license
+      const claimedTrxToOrder = new Map<string, string>();
+      for (const sms of combinedSms.values()) {
+        if (sms.status === 'matched' && sms.matchedOrderId) {
+          claimedTrxToOrder.set(sms.trxId, sms.matchedOrderId);
+        }
+      }
+      for (const o of orders) {
+        if (o.status === 'verified' && o.trxId) {
+          claimedTrxToOrder.set(o.trxId.toUpperCase().trim(), o.orderId);
+        }
+      }
+      for (const l of licenses) {
+        if (l.status === 'verified') {
+          if (l.trxId) claimedTrxToOrder.set(l.trxId.toUpperCase().trim(), l.orderId);
+          if (l.resubmittedTrxId) {
+            claimedTrxToOrder.set(l.resubmittedTrxId.toUpperCase().trim(), l.orderId);
+          }
+        }
       }
 
       const licenseByOrderId = new Map(licenses.map((l) => [l.orderId, l]));
@@ -624,34 +681,63 @@ export function AdminPage() {
         const primaryTrx = ord.trxId.toUpperCase().trim();
         const resubmittedTrx = (lic?.resubmittedTrxId || '').toUpperCase().trim();
         const smsCandidate =
-          (resubmittedTrx && combinedSms.get(resubmittedTrx)) || combinedSms.get(primaryTrx);
+          (resubmittedTrx ? combinedSms.get(resubmittedTrx) : undefined) ||
+          combinedSms.get(primaryTrx);
 
-        if (
-          smsCandidate &&
-          smsCandidate.amount + 0.01 >= ord.amount &&
-          smsCandidate.status !== 'ignored'
-        ) {
-          const batch = writeBatch(db);
-          batch.update(doc(db, 'orders', ord.orderId), {
+        if (!smsCandidate || smsCandidate.status === 'ignored') continue;
+
+        // Anti-duplicate / anti-reuse check
+        const isMatchedToThisOrder =
+          smsCandidate.status === 'matched' &&
+          (smsCandidate.matchedOrderId === ord.orderId ||
+            (lic && smsCandidate.matchedLicenseKey === lic.licenseKey));
+        if (smsCandidate.status !== 'unused' && !isMatchedToThisOrder) continue;
+
+        const existingClaim = claimedTrxToOrder.get(smsCandidate.trxId);
+        if (existingClaim && existingClaim !== ord.orderId) continue;
+
+        // Strict 4-field check: provider + senderPhone + trxId + amount (>=)
+        const isResubmitted = Boolean(resubmittedTrx && smsCandidate.trxId === resubmittedTrx);
+        const expectedProvider = isResubmitted
+          ? lic?.resubmittedPaymentMethod || ord.paymentMethod
+          : ord.paymentMethod;
+        const expectedPhone = normalizeBdPhone(
+          (isResubmitted ? lic?.resubmittedPhone || ord.senderPhone : ord.senderPhone) || ''
+        );
+        const smsPhone = normalizeBdPhone(smsCandidate.senderPhone || '');
+
+        if (!expectedProvider || smsCandidate.provider !== expectedProvider) continue;
+        if (!expectedPhone || expectedPhone.length < 6 || !smsPhone || expectedPhone !== smsPhone) {
+          continue;
+        }
+        if (Number(smsCandidate.amount) + 0.0001 < Number(ord.amount)) continue;
+
+        const batch = writeBatch(db);
+        batch.update(doc(db, 'orders', ord.orderId), {
+          status: 'verified',
+          updatedAt: serverTimestamp(),
+        });
+        if (lic) {
+          batch.update(doc(db, 'licenses', lic.licenseKey), {
             status: 'verified',
             updatedAt: serverTimestamp(),
           });
-          if (lic) {
-            batch.update(doc(db, 'licenses', lic.licenseKey), {
-              status: 'verified',
-              updatedAt: serverTimestamp(),
-            });
-          }
-          const safeSmsId = smsCandidate.trxId.replace(/[^A-Z0-9_-]/g, '_');
-          batch.update(doc(db, 'smsTransactions', safeSmsId), {
-            status: 'matched',
-            matchedOrderId: ord.orderId,
-            matchedLicenseKey: lic?.licenseKey || '',
-            updatedAt: serverTimestamp(),
-          });
-          await batch.commit();
-          autoMatchedCount += 1;
         }
+        const safeSmsId = smsCandidate.trxId.replace(/[^A-Z0-9_-]/g, '_');
+        batch.update(doc(db, 'smsTransactions', safeSmsId), {
+          status: 'matched',
+          matchedOrderId: ord.orderId,
+          matchedLicenseKey: lic?.licenseKey || '',
+          updatedAt: serverTimestamp(),
+        });
+        await batch.commit();
+
+        // Mark claimed immediately in memory so another order in the same batch cannot reuse it
+        smsCandidate.status = 'matched';
+        smsCandidate.matchedOrderId = ord.orderId;
+        smsCandidate.matchedLicenseKey = lic?.licenseKey || '';
+        claimedTrxToOrder.set(smsCandidate.trxId, ord.orderId);
+        autoMatchedCount += 1;
       }
 
       await loadWebhookStatus();
@@ -1267,14 +1353,151 @@ export function AdminPage() {
   };
 
   const handleDeleteOrderAndLicense = async (order: PaymentOrder) => {
+    setDeletingOrder(true);
     try {
       await deleteDoc(doc(db, 'orders', order.orderId));
       if (order.licenseKey) {
         await deleteDoc(doc(db, 'licenses', order.licenseKey));
       }
+      setPendingDeleteOrder(null);
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, `orders/${order.orderId}`);
+    } finally {
+      setDeletingOrder(false);
     }
+  };
+
+  const getValidityMeta = (ord: PaymentOrder, lic?: LicenseRecord) => {
+    const expiresAtMs = lic?.expiresAtMs ?? ord.expiresAtMs ?? 0;
+    const durationDays = lic?.durationDays ?? ord.durationDays ?? 0;
+
+    let totalLabel = 'Lifetime';
+    if (expiresAtMs > 0 || durationDays > 0) {
+      if (durationDays === 30) totalLabel = '1 Month (30d)';
+      else if (durationDays === 60) totalLabel = '2 Months (60d)';
+      else if (durationDays === 90) totalLabel = '3 Months (90d)';
+      else if (durationDays === 180) totalLabel = '6 Months (180d)';
+      else if (durationDays === 365) totalLabel = '1 Year (365d)';
+      else if (durationDays === 730) totalLabel = '2 Years (730d)';
+      else if (durationDays > 0) totalLabel = `${durationDays} Days`;
+      else totalLabel = 'Timed';
+    }
+
+    if (expiresAtMs <= 0) {
+      return {
+        totalLabel: 'Lifetime',
+        remainingLabel: 'No expiry',
+        expiryDateStr: '—',
+        tone: 'good' as const,
+      };
+    }
+
+    const expiryDateStr = new Date(expiresAtMs).toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+    const diffMs = expiresAtMs - Date.now();
+    if (diffMs <= 0) {
+      const daysAgo = Math.max(1, Math.floor(Math.abs(diffMs) / 86400000));
+      return {
+        totalLabel,
+        remainingLabel: `Expired (${daysAgo}d ago)`,
+        expiryDateStr,
+        tone: 'expired' as const,
+      };
+    }
+    if (diffMs < 86400000) {
+      const hrs = Math.max(1, Math.ceil(diffMs / 3600000));
+      return {
+        totalLabel,
+        remainingLabel: `${hrs}h left`,
+        expiryDateStr,
+        tone: 'warn' as const,
+      };
+    }
+    const daysLeft = Math.ceil(diffMs / 86400000);
+    return {
+      totalLabel,
+      remainingLabel: `${daysLeft} days left`,
+      expiryDateStr,
+      tone: daysLeft <= 7 ? ('warn' as const) : ('good' as const),
+    };
+  };
+
+  const getOrderSmsDiagnostic = (
+    ord: PaymentOrder,
+    lic?: LicenseRecord
+  ): { text: string; tone: 'error' | 'warn' | 'ready' } | null => {
+    if (ord.status !== 'provisional' && ord.status !== 'payment_required') return null;
+
+    const primaryTrx = (ord.trxId || '').toUpperCase().trim();
+    const resubmittedTrx = (lic?.resubmittedTrxId || '').toUpperCase().trim();
+    const targetTrx = resubmittedTrx || primaryTrx;
+    if (!targetTrx) return null;
+
+    const smsMatch = smsList.find((s) => s.trxId.toUpperCase().trim() === targetTrx);
+    const verifiedElsewhere =
+      orders.some(
+        (o) =>
+          o.orderId !== ord.orderId &&
+          o.status === 'verified' &&
+          o.trxId.toUpperCase().trim() === targetTrx
+      ) ||
+      licenses.some(
+        (l) =>
+          l.orderId !== ord.orderId &&
+          l.status === 'verified' &&
+          ((l.trxId || '').toUpperCase().trim() === targetTrx ||
+            (l.resubmittedTrxId || '').toUpperCase().trim() === targetTrx)
+      ) ||
+      Boolean(
+        smsMatch &&
+          smsMatch.status === 'matched' &&
+          smsMatch.matchedOrderId &&
+          smsMatch.matchedOrderId !== ord.orderId
+      );
+
+    if (verifiedElsewhere) {
+      return { text: 'TrxID already used on another order', tone: 'error' };
+    }
+
+    if (!smsMatch) return null;
+    if (smsMatch.status === 'ignored') {
+      return { text: 'SMS marked ignored', tone: 'warn' };
+    }
+
+    const isResubmitted = Boolean(resubmittedTrx && targetTrx === resubmittedTrx);
+    const expectedProvider = isResubmitted
+      ? lic?.resubmittedPaymentMethod || ord.paymentMethod
+      : ord.paymentMethod;
+    const expectedPhone = normalizeBdPhone(
+      (isResubmitted ? lic?.resubmittedPhone || ord.senderPhone : ord.senderPhone) || ''
+    );
+    const smsPhone = normalizeBdPhone(smsMatch.senderPhone || '');
+
+    if (expectedProvider && smsMatch.provider !== expectedProvider) {
+      return {
+        text: `Provider mismatch: SMS is ${smsMatch.provider.toUpperCase()}`,
+        tone: 'error',
+      };
+    }
+
+    if (expectedPhone && smsPhone && expectedPhone !== smsPhone) {
+      return {
+        text: `Phone mismatch: SMS ${smsMatch.senderPhone || 'unknown'}`,
+        tone: 'error',
+      };
+    }
+
+    if (Number(smsMatch.amount) + 0.0001 < Number(ord.amount)) {
+      return {
+        text: `Shortfall: Paid ৳${smsMatch.amount} / Need ৳${ord.amount}`,
+        tone: 'error',
+      };
+    }
+
+    return { text: 'Matching SMS ready — click Sync', tone: 'ready' };
   };
 
   if (authLoading) {
@@ -1727,7 +1950,7 @@ export function AdminPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2.5 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
                 <div className="rounded-xl border border-slate-200 dark:border-zinc-800 p-3">
                   <span className="text-slate-500 dark:text-zinc-400 block text-[11px]">
                     SMS_WEBHOOK_SECRET
@@ -1748,6 +1971,24 @@ export function AdminPage() {
                 </div>
                 <div className="rounded-xl border border-slate-200 dark:border-zinc-800 p-3">
                   <span className="text-slate-500 dark:text-zinc-400 block text-[11px]">
+                    Direct Firebase Save
+                  </span>
+                  <span
+                    className={`font-mono font-bold mt-0.5 inline-block ${
+                      webhookStatus?.firebaseAdminConfigured
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : 'text-amber-600 dark:text-amber-400'
+                    }`}
+                  >
+                    {webhookStatus === null
+                      ? 'Checking...'
+                      : webhookStatus.firebaseAdminConfigured
+                      ? 'Active (24/7)'
+                      : 'Need SA Key (Buffered)'}
+                  </span>
+                </div>
+                <div className="rounded-xl border border-slate-200 dark:border-zinc-800 p-3">
+                  <span className="text-slate-500 dark:text-zinc-400 block text-[11px]">
                     Buffered / Unsynced SMS
                   </span>
                   <span className="font-mono font-bold text-slate-900 dark:text-zinc-100 mt-0.5 inline-block">
@@ -1757,6 +1998,12 @@ export function AdminPage() {
                   </span>
                 </div>
               </div>
+
+              {webhookStatus?.lastFirestoreSyncError && (
+                <p className="text-xs font-mono text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 rounded-lg px-3 py-2">
+                  Firebase Direct Save Error: {webhookStatus.lastFirestoreSyncError}
+                </p>
+              )}
 
               <button
                 type="button"
@@ -1813,16 +2060,32 @@ export function AdminPage() {
                     <th className="py-3 px-4">Software &amp; Plan</th>
                     <th className="py-3 px-4">Payment &amp; TrxID</th>
                     <th className="py-3 px-4">License Key</th>
+                    <th className="py-3 px-4">Validity / Remaining</th>
                     <th className="py-3 px-4">Status</th>
                     <th className="py-3 px-4 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-zinc-800/80">
-                  {orders
-                    .filter((o) => orderFilter === 'all' || o.status === orderFilter)
-                    .map((ord) => {
+                  {(() => {
+                    const filteredOrders = orders.filter(
+                      (o) => orderFilter === 'all' || o.status === orderFilter
+                    );
+                    if (filteredOrders.length === 0) {
+                      return (
+                        <tr>
+                          <td colSpan={7} className="py-8 text-center text-xs text-slate-400">
+                            {orders.length === 0
+                              ? 'No orders recorded yet.'
+                              : `No orders with status "${orderFilter.replace('_', ' ')}".`}
+                          </td>
+                        </tr>
+                      );
+                    }
+                    return filteredOrders.map((ord) => {
                       const lic = licenses.find((l) => l.orderId === ord.orderId);
                       const sym = ord.currency === 'BDT' ? '৳' : '$';
+                      const validity = getValidityMeta(ord, lic);
+                      const smsDiag = getOrderSmsDiagnostic(ord, lic);
                       return (
                         <tr key={ord.id} className="hover:bg-slate-50/70 dark:hover:bg-zinc-800/40">
                           <td className="py-3 px-4">
@@ -1850,12 +2113,51 @@ export function AdminPage() {
                             </div>
                             {lic?.resubmittedTrxId && (
                               <div className="text-amber-600 dark:text-amber-400 font-semibold">
-                                Resubmitted: {lic.resubmittedTrxId}
+                                Resubmitted:{' '}
+                                {lic.resubmittedPaymentMethod
+                                  ? `${lic.resubmittedPaymentMethod.toUpperCase()} `
+                                  : ''}
+                                {lic.resubmittedTrxId}
+                              </div>
+                            )}
+                            {smsDiag && (
+                              <div
+                                className={`mt-1 inline-block px-1.5 py-0.5 rounded text-[11px] font-sans font-semibold ${
+                                  smsDiag.tone === 'error'
+                                    ? 'bg-red-500/15 text-red-700 dark:text-red-400'
+                                    : smsDiag.tone === 'warn'
+                                    ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
+                                    : 'bg-teal-500/15 text-teal-700 dark:text-teal-400'
+                                }`}
+                              >
+                                {smsDiag.text}
                               </div>
                             )}
                           </td>
                           <td className="py-3 px-4 font-mono text-xs font-semibold text-teal-700 dark:text-teal-300">
                             {ord.licenseKey || '—'}
+                          </td>
+                          <td className="py-3 px-4 text-xs">
+                            <div className="font-semibold text-slate-800 dark:text-zinc-200 flex items-center gap-1">
+                              <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                              <span>{validity.totalLabel}</span>
+                            </div>
+                            <div
+                              className={`font-mono font-semibold mt-0.5 ${
+                                validity.tone === 'expired'
+                                  ? 'text-red-600 dark:text-red-400'
+                                  : validity.tone === 'warn'
+                                  ? 'text-amber-600 dark:text-amber-400'
+                                  : 'text-emerald-700 dark:text-emerald-400'
+                              }`}
+                            >
+                              {validity.remainingLabel}
+                            </div>
+                            {validity.expiryDateStr !== '—' && (
+                              <div className="text-[11px] font-mono text-slate-400">
+                                Exp: {validity.expiryDateStr}
+                              </div>
+                            )}
                           </td>
                           <td className="py-3 px-4">
                             <span
@@ -1879,12 +2181,22 @@ export function AdminPage() {
                                   type="button"
                                   onClick={() => void handleUpdateOrderStatus(ord, 'verified')}
                                   className="p-1.5 rounded-lg text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 cursor-pointer"
-                                  title="Approve / Verify License"
+                                  title={
+                                    ord.status === 'revoked'
+                                      ? 'Re-verify / Reactivate License'
+                                      : ord.status === 'payment_required'
+                                      ? 'Unlock & Verify License'
+                                      : 'Approve / Verify License'
+                                  }
                                 >
-                                  <ShieldCheck className="w-4 h-4" />
+                                  {ord.status === 'payment_required' ? (
+                                    <Unlock className="w-4 h-4" />
+                                  ) : (
+                                    <ShieldCheck className="w-4 h-4" />
+                                  )}
                                 </button>
                               )}
-                              {ord.status !== 'payment_required' && (
+                              {ord.status !== 'payment_required' && ord.status !== 'revoked' && (
                                 <button
                                   type="button"
                                   onClick={() => void handleUpdateOrderStatus(ord, 'payment_required')}
@@ -1894,19 +2206,19 @@ export function AdminPage() {
                                   <Lock className="w-4 h-4" />
                                 </button>
                               )}
-                              {ord.status === 'payment_required' && (
+                              {ord.status !== 'revoked' && (
                                 <button
                                   type="button"
-                                  onClick={() => void handleUpdateOrderStatus(ord, 'verified')}
-                                  className="p-1.5 rounded-lg text-teal-700 dark:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-950/30 cursor-pointer"
-                                  title="Unlock License"
+                                  onClick={() => void handleUpdateOrderStatus(ord, 'revoked')}
+                                  className="p-1.5 rounded-lg text-orange-700 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-950/30 cursor-pointer"
+                                  title="Revoke License (Keep Record, Block Key)"
                                 >
-                                  <Unlock className="w-4 h-4" />
+                                  <Ban className="w-4 h-4" />
                                 </button>
                               )}
                               <button
                                 type="button"
-                                onClick={() => void handleDeleteOrderAndLicense(ord)}
+                                onClick={() => setPendingDeleteOrder(ord)}
                                 className="p-1.5 rounded-lg text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 cursor-pointer"
                                 title={t.admin.delete}
                               >
@@ -1916,14 +2228,8 @@ export function AdminPage() {
                           </td>
                         </tr>
                       );
-                    })}
-                  {orders.length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="py-8 text-center text-xs text-slate-400">
-                        No orders recorded yet.
-                      </td>
-                    </tr>
-                  )}
+                    });
+                  })()}
                 </tbody>
               </table>
             </div>
@@ -3109,6 +3415,67 @@ export function AdminPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Permanent Delete Order Confirmation Modal */}
+      {pendingDeleteOrder && (
+        <div
+          className="fixed inset-0 z-50 bg-black/55 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => !deletingOrder && setPendingDeleteOrder(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 space-y-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-red-500/15 text-red-600 dark:text-red-400 flex items-center justify-center shrink-0">
+                <ShieldAlert className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-display text-lg font-bold text-slate-900 dark:text-zinc-50">
+                  Delete Order &amp; License Permanently?
+                </h3>
+                <p className="text-xs text-slate-600 dark:text-zinc-400 leading-relaxed">
+                  This will permanently erase the order record and license key from Firestore. It cannot be undone. (If you only want to block access while keeping records, use <strong>Revoke</strong> instead.)
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 dark:border-zinc-800 bg-slate-50 dark:bg-zinc-950 p-3.5 space-y-1 text-xs">
+              <p className="font-semibold text-slate-900 dark:text-zinc-100">
+                {pendingDeleteOrder.customerName} ({pendingDeleteOrder.customerEmail})
+              </p>
+              <p className="text-slate-600 dark:text-zinc-400">
+                {pendingDeleteOrder.softwareName} · {pendingDeleteOrder.planName || 'Standard'}
+              </p>
+              {pendingDeleteOrder.licenseKey && (
+                <p className="font-mono font-semibold text-teal-700 dark:text-teal-400">
+                  Key: {pendingDeleteOrder.licenseKey}
+                </p>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                disabled={deletingOrder}
+                onClick={() => setPendingDeleteOrder(null)}
+                className="h-10 px-4 rounded-xl border border-slate-200 dark:border-zinc-700 text-xs font-semibold text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800 cursor-pointer disabled:opacity-50"
+              >
+                {t.admin.cancel}
+              </button>
+              <button
+                type="button"
+                disabled={deletingOrder}
+                onClick={() => void handleDeleteOrderAndLicense(pendingDeleteOrder)}
+                className="h-10 px-5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{deletingOrder ? 'Deleting...' : 'OK, Delete Permanently'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -100,6 +100,7 @@ export function SoftwareDetailPage() {
     orderId: string;
     licenseKey: string;
     status: 'verified' | 'provisional';
+    mismatchReason?: string;
     planName: string;
     amount: number;
     currency: 'BDT' | 'USD';
@@ -489,6 +490,8 @@ export function SoftwareDetailPage() {
         durationDays,
         currency: currencyCode,
         amount: finalPrice,
+        paymentMethod,
+        senderPhone: cleanPhone.slice(0, 30),
         trxId: cleanTrx.slice(0, 60),
         status: 'provisional',
         graceUntilMs,
@@ -524,8 +527,9 @@ export function SoftwareDetailPage() {
 
       await batch.commit();
 
-      // Check instant SMS match against server PaySync inbox
+      // Check instant SMS match against Firebase & server PaySync inbox (strict 4-field + anti-reuse check)
       let effectiveStatus: 'verified' | 'provisional' = 'provisional';
+      let mismatchReason: string | undefined;
       try {
         const matchResp = await fetch('/api/payments/match-trx', {
           method: 'POST',
@@ -535,12 +539,31 @@ export function SoftwareDetailPage() {
             licenseKey,
             orderId,
             amount: finalPrice,
+            paymentMethod,
+            senderPhone: cleanPhone,
           }),
         });
         if (matchResp.ok) {
-          const matchData = (await matchResp.json()) as { matched?: boolean };
+          const matchData = (await matchResp.json()) as {
+            matched?: boolean;
+            reason?: string;
+            paidAmount?: number;
+            expectedAmount?: number;
+            receivedProvider?: string;
+            expectedProvider?: string;
+          };
           if (matchData.matched) {
             effectiveStatus = 'verified';
+          } else if (matchData.reason) {
+            if (matchData.reason === 'already_used') {
+              mismatchReason = 'This Transaction ID (TrxID) has already been used for another order.';
+            } else if (matchData.reason === 'insufficient_amount') {
+              mismatchReason = `Received amount (${currencySymbol}${matchData.paidAmount ?? '?'}) is less than required (${currencySymbol}${matchData.expectedAmount ?? finalPrice}).`;
+            } else if (matchData.reason === 'provider_mismatch') {
+              mismatchReason = `Payment method mismatch: SMS is from ${(matchData.receivedProvider || '').toUpperCase()}, but ${(matchData.expectedProvider || paymentMethod).toUpperCase()} was selected.`;
+            } else if (matchData.reason === 'phone_mismatch') {
+              mismatchReason = 'Sender phone number does not match the received payment SMS.';
+            }
           }
         }
       } catch {
@@ -551,13 +574,14 @@ export function SoftwareDetailPage() {
         orderId,
         licenseKey,
         status: effectiveStatus,
+        mismatchReason,
         planName,
         amount: finalPrice,
         currency: currencyCode,
         graceUntilMs,
       });
 
-      if (pricingMode === 'paid_download') {
+      if (pricingMode === 'paid_download' && !mismatchReason) {
         triggerFileDownload();
         setDownloadSuccess(true);
       }
@@ -1170,6 +1194,8 @@ export function SoftwareDetailPage() {
                   className={`rounded-xl border p-4 flex items-start gap-3 ${
                     orderResult.status === 'verified'
                       ? 'border-emerald-500/35 bg-emerald-500/10 text-emerald-900 dark:text-emerald-200'
+                      : orderResult.mismatchReason
+                      ? 'border-amber-500/40 bg-amber-500/10 text-amber-900 dark:text-amber-200'
                       : 'border-teal-600/30 bg-teal-500/10 text-[#062326] dark:text-teal-100'
                   }`}
                 >
@@ -1182,9 +1208,13 @@ export function SoftwareDetailPage() {
                     <p className="font-bold text-sm">
                       {orderResult.status === 'verified'
                         ? t.details.orderVerifiedBadge
+                        : orderResult.mismatchReason
+                        ? 'Verification Failed — Review Required'
                         : t.details.orderProvisionalBadge}
                     </p>
-                    <p className="opacity-85">{t.details.graceNote}</p>
+                    <p className="opacity-90">
+                      {orderResult.mismatchReason || t.details.graceNote}
+                    </p>
                   </div>
                 </div>
 
@@ -1220,17 +1250,21 @@ export function SoftwareDetailPage() {
                 </div>
 
                 <div className="flex flex-col sm:flex-row gap-3">
-                  <button
-                    type="button"
-                    onClick={triggerFileDownload}
-                    className="flex-1 h-11 px-5 rounded-xl bg-[#0d9488] hover:bg-[#0f766e] text-white dark:bg-[#10d9a0] dark:hover:bg-[#0ec28f] dark:text-slate-950 font-bold text-sm inline-flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <Download className="w-4 h-4" />
-                    <span>{t.details.directDownload}</span>
-                  </button>
+                  {!orderResult.mismatchReason && (
+                    <button
+                      type="button"
+                      onClick={triggerFileDownload}
+                      className="flex-1 h-11 px-5 rounded-xl bg-[#0d9488] hover:bg-[#0f766e] text-white dark:bg-[#10d9a0] dark:hover:bg-[#0ec28f] dark:text-slate-950 font-bold text-sm inline-flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <Download className="w-4 h-4" />
+                      <span>{t.details.directDownload}</span>
+                    </button>
+                  )}
                   <Link
                     to={`/license?key=${encodeURIComponent(orderResult.licenseKey)}`}
-                    className="h-11 px-4 rounded-xl border border-teal-900/20 dark:border-teal-500/25 bg-white dark:bg-[#0b2329] text-xs font-semibold text-[#062326] dark:text-teal-100 inline-flex items-center justify-center gap-1.5 hover:bg-teal-50 dark:hover:bg-[#103038]"
+                    className={`${
+                      orderResult.mismatchReason ? 'flex-1 ' : ''
+                    }h-11 px-4 rounded-xl border border-teal-900/20 dark:border-teal-500/25 bg-white dark:bg-[#0b2329] text-xs font-semibold text-[#062326] dark:text-teal-100 inline-flex items-center justify-center gap-1.5 hover:bg-teal-50 dark:hover:bg-[#103038]`}
                   >
                     <KeyRound className="w-3.5 h-3.5" />
                     <span>{t.details.checkLicenseStatus}</span>

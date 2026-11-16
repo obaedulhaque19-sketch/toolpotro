@@ -56,6 +56,7 @@ export function LicenseStatusPage() {
   const [copiedNum, setCopiedNum] = useState<string | null>(null);
 
   // Resubmit form state
+  const [resubmitMethod, setResubmitMethod] = useState<'bkash' | 'nagad'>('bkash');
   const [resubmitPhone, setResubmitPhone] = useState('');
   const [resubmitTrx, setResubmitTrx] = useState('');
   const [resubmitting, setResubmitting] = useState(false);
@@ -115,6 +116,9 @@ export function LicenseStatusPage() {
 
         const lic = { id: snap.id, ...(snap.data() as Omit<LicenseRecord, 'id'>) };
         setLicenseDoc(lic);
+        if (lic.paymentMethod === 'nagad' || lic.paymentMethod === 'bkash') {
+          setResubmitMethod(lic.paymentMethod);
+        }
 
         const apiRes = await fetch(`/api/license/verify?key=${encodeURIComponent(cleanKey)}`);
         const apiJson = (await apiRes.json()) as VerifyApiResult;
@@ -168,6 +172,7 @@ export function LicenseStatusPage() {
       await updateDoc(doc(db, 'licenses', licenseDoc.licenseKey), {
         resubmittedTrxId: cleanTrx,
         resubmittedPhone: cleanPhone,
+        resubmittedPaymentMethod: resubmitMethod,
         resubmittedAtMs: Date.now(),
         updatedAt: serverTimestamp(),
       });
@@ -180,14 +185,43 @@ export function LicenseStatusPage() {
           licenseKey: licenseDoc.licenseKey,
           orderId: licenseDoc.orderId,
           amount: licenseDoc.amount,
+          paymentMethod: resubmitMethod,
+          senderPhone: cleanPhone,
         }),
       });
-      const matchJson = (await matchResp.json()) as { matched?: boolean };
+      const matchJson = (await matchResp.json()) as {
+        matched?: boolean;
+        reason?: string;
+        paidAmount?: number;
+        expectedAmount?: number;
+        receivedProvider?: string;
+        expectedProvider?: string;
+      };
 
       await lookupLicense(licenseDoc.licenseKey);
 
       if (matchJson.matched) {
         setResubmitMsg({ type: 'success', text: t.licensePage.resubmitSuccessMatched });
+      } else if (matchJson.reason === 'already_used') {
+        setResubmitMsg({
+          type: 'error',
+          text: 'This Transaction ID (TrxID) has already been used for another order.',
+        });
+      } else if (matchJson.reason === 'insufficient_amount') {
+        setResubmitMsg({
+          type: 'error',
+          text: `Paid amount (${currencySymbol}${matchJson.paidAmount ?? '?'}) is less than required (${currencySymbol}${matchJson.expectedAmount ?? licenseDoc.amount}).`,
+        });
+      } else if (matchJson.reason === 'provider_mismatch') {
+        setResubmitMsg({
+          type: 'error',
+          text: `Provider mismatch: received SMS is ${(matchJson.receivedProvider || '').toUpperCase()}, but ${resubmitMethod.toUpperCase()} was selected.`,
+        });
+      } else if (matchJson.reason === 'phone_mismatch') {
+        setResubmitMsg({
+          type: 'error',
+          text: 'Sender phone number does not match the payment SMS received by the server.',
+        });
       } else {
         setResubmitMsg({ type: 'info', text: t.licensePage.resubmitSuccessPending });
       }
@@ -389,30 +423,59 @@ export function LicenseStatusPage() {
                 </div>
               )}
 
-              <form onSubmit={handleResubmitTrx} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <input
-                  type="tel"
-                  required
-                  value={resubmitPhone}
-                  onChange={(e) => setResubmitPhone(e.target.value)}
-                  placeholder="017XXXXXXXX"
-                  className="h-10 px-3 rounded-xl border border-teal-900/20 dark:border-teal-500/25 bg-[#f7fcfa] dark:bg-[#081a1f] font-mono text-xs text-[#062326] dark:text-white"
-                />
-                <input
-                  type="text"
-                  required
-                  value={resubmitTrx}
-                  onChange={(e) => setResubmitTrx(e.target.value.toUpperCase())}
-                  placeholder="Valid TrxID (e.g. BKA9X72LMQ)"
-                  className="h-10 px-3 rounded-xl border border-teal-900/20 dark:border-teal-500/25 bg-[#f7fcfa] dark:bg-[#081a1f] font-mono text-xs uppercase text-[#062326] dark:text-white"
-                />
-                <button
-                  type="submit"
-                  disabled={resubmitting}
-                  className="h-10 px-4 rounded-xl bg-[#0d9488] hover:bg-[#0f766e] text-white dark:bg-[#10d9a0] dark:hover:bg-[#0ec28f] dark:text-slate-950 font-bold text-xs transition-colors disabled:opacity-60 cursor-pointer"
-                >
-                  {resubmitting ? '...' : t.licensePage.resubmitBtn}
-                </button>
+              <form onSubmit={handleResubmitTrx} className="space-y-3">
+                <div className="grid grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setResubmitMethod('bkash')}
+                    className={`h-9 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                      resubmitMethod === 'bkash'
+                        ? 'border-pink-600 bg-pink-600/15 text-pink-700 dark:text-pink-300'
+                        : 'border-teal-900/15 dark:border-teal-500/20 bg-[#f7fcfa] dark:bg-[#081a1f] text-[#1e4347] dark:text-slate-300'
+                    }`}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-pink-500" />
+                    bKash
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setResubmitMethod('nagad')}
+                    className={`h-9 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                      resubmitMethod === 'nagad'
+                        ? 'border-orange-600 bg-orange-600/15 text-orange-700 dark:text-orange-300'
+                        : 'border-teal-900/15 dark:border-teal-500/20 bg-[#f7fcfa] dark:bg-[#081a1f] text-[#1e4347] dark:text-slate-300'
+                    }`}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-orange-500" />
+                    Nagad
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <input
+                    type="tel"
+                    required
+                    value={resubmitPhone}
+                    onChange={(e) => setResubmitPhone(e.target.value)}
+                    placeholder="017XXXXXXXX"
+                    className="h-10 px-3 rounded-xl border border-teal-900/20 dark:border-teal-500/25 bg-[#f7fcfa] dark:bg-[#081a1f] font-mono text-xs text-[#062326] dark:text-white"
+                  />
+                  <input
+                    type="text"
+                    required
+                    value={resubmitTrx}
+                    onChange={(e) => setResubmitTrx(e.target.value.toUpperCase())}
+                    placeholder="Valid TrxID (e.g. BKA9X72LMQ)"
+                    className="h-10 px-3 rounded-xl border border-teal-900/20 dark:border-teal-500/25 bg-[#f7fcfa] dark:bg-[#081a1f] font-mono text-xs uppercase text-[#062326] dark:text-white"
+                  />
+                  <button
+                    type="submit"
+                    disabled={resubmitting}
+                    className="h-10 px-4 rounded-xl bg-[#0d9488] hover:bg-[#0f766e] text-white dark:bg-[#10d9a0] dark:hover:bg-[#0ec28f] dark:text-slate-950 font-bold text-xs transition-colors disabled:opacity-60 cursor-pointer"
+                  >
+                    {resubmitting ? '...' : t.licensePage.resubmitBtn}
+                  </button>
+                </div>
               </form>
 
               {resubmitMsg && (

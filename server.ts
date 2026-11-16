@@ -506,10 +506,30 @@ interface ServiceAccountCreds {
 }
 
 let cachedSaToken: { token: string; expiresAtMs: number } | null = null;
+let lastFirestoreSyncError: string | null = null;
 
 function parseServiceAccountCreds(): ServiceAccountCreds | null {
-  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim();
+  let raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim();
   if (!raw) return null;
+
+  // Strip accidental surrounding quotes from env UI paste
+  if (
+    (raw.startsWith('"') && raw.endsWith('"')) ||
+    (raw.startsWith("'") && raw.endsWith("'"))
+  ) {
+    raw = raw.slice(1, -1).trim();
+  }
+
+  // Support base64-encoded service account JSON if provided
+  if (!raw.startsWith('{')) {
+    try {
+      const decoded = Buffer.from(raw, 'base64').toString('utf-8').trim();
+      if (decoded.startsWith('{')) raw = decoded;
+    } catch {
+      // Fall through to JSON.parse
+    }
+  }
+
   try {
     const parsed = JSON.parse(raw) as Partial<ServiceAccountCreds>;
     if (parsed.client_email && parsed.private_key) {
@@ -558,7 +578,10 @@ async function getFirebaseAdminAccessToken(): Promise<string | null> {
       }),
       signal: AbortSignal.timeout(4000),
     });
-    if (!resp.ok) return null;
+    if (!resp.ok) {
+      lastFirestoreSyncError = `OAuth token request failed (${resp.status})`;
+      return null;
+    }
     const data = (await resp.json()) as { access_token?: string; expires_in?: number };
     if (data.access_token) {
       cachedSaToken = {
@@ -567,10 +590,121 @@ async function getFirebaseAdminAccessToken(): Promise<string | null> {
       };
       return data.access_token;
     }
-  } catch {
+  } catch (err) {
+    lastFirestoreSyncError = err instanceof Error ? err.message : 'OAuth token error';
     return null;
   }
   return null;
+}
+
+function normalizeBdPhone(phone: string): string {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (digits.startsWith('880') && digits.length === 13) {
+    return digits.slice(2);
+  }
+  if (digits.startsWith('1') && digits.length === 10) {
+    return `0${digits}`;
+  }
+  return digits;
+}
+
+type SmsMismatchReason =
+  | 'already_used'
+  | 'provider_mismatch'
+  | 'phone_mismatch'
+  | 'insufficient_amount';
+
+function evaluateSmsMatch(params: {
+  receipt: StoredSmsReceipt;
+  expectedProvider?: string;
+  expectedPhone?: string;
+  expectedAmount: number;
+  targetOrderId?: string;
+  targetLicenseKey?: string;
+}): { ok: boolean; reason?: SmsMismatchReason } {
+  const {
+    receipt,
+    expectedProvider,
+    expectedPhone,
+    expectedAmount,
+    targetOrderId,
+    targetLicenseKey,
+  } = params;
+
+  if (receipt.status === 'ignored') {
+    return { ok: false, reason: 'already_used' };
+  }
+
+  if (receipt.status === 'matched') {
+    const matchesTargetKey =
+      Boolean(targetLicenseKey) &&
+      Boolean(receipt.matchedLicenseKey) &&
+      receipt.matchedLicenseKey === targetLicenseKey;
+    const matchesTargetOrder =
+      Boolean(targetOrderId) &&
+      Boolean(receipt.matchedOrderId) &&
+      receipt.matchedOrderId === targetOrderId;
+
+    if (!matchesTargetKey && !matchesTargetOrder) {
+      return { ok: false, reason: 'already_used' };
+    }
+    if (
+      targetLicenseKey &&
+      receipt.matchedLicenseKey &&
+      receipt.matchedLicenseKey !== targetLicenseKey
+    ) {
+      return { ok: false, reason: 'already_used' };
+    }
+    if (
+      targetOrderId &&
+      receipt.matchedOrderId &&
+      receipt.matchedOrderId !== targetOrderId
+    ) {
+      return { ok: false, reason: 'already_used' };
+    }
+  }
+
+  const cleanExpectedProvider = String(expectedProvider || '').trim().toLowerCase();
+  if (
+    cleanExpectedProvider &&
+    (cleanExpectedProvider === 'bkash' || cleanExpectedProvider === 'nagad') &&
+    receipt.provider !== cleanExpectedProvider
+  ) {
+    return { ok: false, reason: 'provider_mismatch' };
+  }
+
+  const normExpectedPhone = normalizeBdPhone(expectedPhone || '');
+  const normSmsPhone = normalizeBdPhone(receipt.senderPhone || '');
+  if (!normExpectedPhone || !normSmsPhone || normExpectedPhone.length < 6 || normExpectedPhone !== normSmsPhone) {
+    return { ok: false, reason: 'phone_mismatch' };
+  }
+
+  if (Number(receipt.amount) + 0.0001 < Number(expectedAmount)) {
+    return { ok: false, reason: 'insufficient_amount' };
+  }
+
+  return { ok: true };
+}
+
+const trxLockQueues = new Map<string, Promise<void>>();
+async function withTrxLock<T>(trxId: string, fn: () => Promise<T>): Promise<T> {
+  const key = trxId.toUpperCase().trim() || '__empty__';
+  const prev = trxLockQueues.get(key) || Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((res) => {
+    release = res;
+  });
+  const chain = prev.then(() => gate);
+  trxLockQueues.set(key, chain);
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (trxLockQueues.get(key) === chain) {
+      trxLockQueues.delete(key);
+    }
+  }
 }
 
 interface FirestoreLicenseDoc {
@@ -582,8 +716,12 @@ interface FirestoreLicenseDoc {
   durationDays: number;
   currency: string;
   amount: number;
+  paymentMethod?: 'bkash' | 'nagad' | 'free';
+  senderPhone?: string;
   trxId: string;
   resubmittedTrxId?: string;
+  resubmittedPhone?: string;
+  resubmittedPaymentMethod?: 'bkash' | 'nagad' | 'free';
   status: 'provisional' | 'verified' | 'payment_required' | 'revoked';
   graceUntilMs: number;
   expiresAtMs: number;
@@ -624,6 +762,9 @@ async function fetchLicenseDoc(licenseKey: string): Promise<FirestoreLicenseDoc 
         : 'provisional'
     ) as FirestoreLicenseDoc['status'];
 
+    const methodRaw = f.paymentMethod?.stringValue;
+    const resubMethodRaw = f.resubmittedPaymentMethod?.stringValue;
+
     return {
       licenseKey: f.licenseKey?.stringValue || licenseKey,
       orderId: f.orderId?.stringValue || '',
@@ -633,8 +774,18 @@ async function fetchLicenseDoc(licenseKey: string): Promise<FirestoreLicenseDoc 
       durationDays: Number(f.durationDays?.integerValue ?? 0),
       currency: f.currency?.stringValue || 'BDT',
       amount: Number(f.amount?.doubleValue ?? f.amount?.integerValue ?? 0),
+      paymentMethod:
+        methodRaw === 'bkash' || methodRaw === 'nagad' || methodRaw === 'free'
+          ? methodRaw
+          : undefined,
+      senderPhone: f.senderPhone?.stringValue?.trim() || undefined,
       trxId: (f.trxId?.stringValue || '').toUpperCase().trim(),
       resubmittedTrxId: (f.resubmittedTrxId?.stringValue || '').toUpperCase().trim() || undefined,
+      resubmittedPhone: f.resubmittedPhone?.stringValue?.trim() || undefined,
+      resubmittedPaymentMethod:
+        resubMethodRaw === 'bkash' || resubMethodRaw === 'nagad' || resubMethodRaw === 'free'
+          ? resubMethodRaw
+          : undefined,
       status,
       graceUntilMs: Number(f.graceUntilMs?.integerValue ?? 0),
       expiresAtMs: Number(f.expiresAtMs?.integerValue ?? 0),
@@ -645,6 +796,209 @@ async function fetchLicenseDoc(licenseKey: string): Promise<FirestoreLicenseDoc 
     };
   } catch {
     return null;
+  }
+}
+
+async function fetchOrderPaymentMeta(
+  orderId: string
+): Promise<{ paymentMethod?: string; senderPhone?: string } | null> {
+  if (!orderId) return null;
+  const token = await getFirebaseAdminAccessToken();
+  if (!token) return null;
+  const cfg = getFirebasePublicConfig();
+  if (!cfg.projectId) return null;
+
+  try {
+    const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+      cfg.projectId
+    )}/databases/${encodeURIComponent(cfg.databaseId)}/documents/orders/${encodeURIComponent(orderId)}`;
+    const resp = await fetch(endpoint, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!resp.ok) return null;
+    const json = (await resp.json()) as {
+      fields?: Record<string, { stringValue?: string }>;
+    };
+    return {
+      paymentMethod: json.fields?.paymentMethod?.stringValue?.trim().toLowerCase(),
+      senderPhone: json.fields?.senderPhone?.stringValue?.trim(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchSmsTransactionFromFirestore(trxId: string): Promise<StoredSmsReceipt | null> {
+  const token = await getFirebaseAdminAccessToken();
+  if (!token) return null;
+  const cfg = getFirebasePublicConfig();
+  if (!cfg.projectId) return null;
+
+  const safeDocId = trxId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  try {
+    const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+      cfg.projectId
+    )}/databases/${encodeURIComponent(cfg.databaseId)}/documents/smsTransactions/${encodeURIComponent(safeDocId)}`;
+    const resp = await fetch(endpoint, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!resp.ok) return null;
+    const json = (await resp.json()) as {
+      fields?: Record<
+        string,
+        { stringValue?: string; integerValue?: string; doubleValue?: number }
+      >;
+    };
+    const f = json.fields;
+    if (!f) return null;
+    const provRaw = (f.provider?.stringValue || '').toLowerCase();
+    const provider: 'bkash' | 'nagad' = provRaw === 'nagad' ? 'nagad' : 'bkash';
+    const statusRaw = f.status?.stringValue || 'unused';
+    const status: StoredSmsReceipt['status'] =
+      statusRaw === 'matched' || statusRaw === 'ignored' ? statusRaw : 'unused';
+
+    return {
+      trxId: (f.trxId?.stringValue || trxId).toUpperCase().trim(),
+      provider,
+      sender: f.sender?.stringValue || provider,
+      amount: Number(f.amount?.doubleValue ?? f.amount?.integerValue ?? 0),
+      senderPhone: f.senderPhone?.stringValue || '',
+      rawMessage: f.rawMessage?.stringValue || '',
+      receivedAtMs: Number(f.receivedAtMs?.integerValue ?? Date.now()),
+      matchedOrderId: f.matchedOrderId?.stringValue || undefined,
+      matchedLicenseKey: f.matchedLicenseKey?.stringValue || undefined,
+      status,
+      syncedToFirestore: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function isTrxIdAlreadyVerifiedElsewhere(
+  trxId: string,
+  currentOrderId?: string,
+  currentLicenseKey?: string
+): Promise<boolean> {
+  const cleanTrx = trxId.toUpperCase().trim();
+  if (!cleanTrx) return false;
+
+  // Check in-memory verifiedKeys index first
+  const state = loadSmsState();
+  for (const [k, info] of Object.entries(state.verifiedKeys)) {
+    if (info.trxId === cleanTrx && (!currentLicenseKey || k !== currentLicenseKey)) {
+      return true;
+    }
+  }
+
+  const token = await getFirebaseAdminAccessToken();
+  if (!token) return false;
+  const cfg = getFirebasePublicConfig();
+  if (!cfg.projectId) return false;
+  const baseUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+    cfg.projectId
+  )}/databases/${encodeURIComponent(cfg.databaseId)}/documents`;
+
+  const queries = [
+    { collectionId: 'orders', fieldPath: 'trxId' },
+    { collectionId: 'licenses', fieldPath: 'trxId' },
+    { collectionId: 'licenses', fieldPath: 'resubmittedTrxId' },
+  ];
+
+  for (const q of queries) {
+    try {
+      const resp = await fetch(`${baseUrl}:runQuery`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          structuredQuery: {
+            from: [{ collectionId: q.collectionId }],
+            where: {
+              fieldFilter: {
+                field: { fieldPath: q.fieldPath },
+                op: 'EQUAL',
+                value: { stringValue: cleanTrx },
+              },
+            },
+            limit: 10,
+          },
+        }),
+        signal: AbortSignal.timeout(3000),
+      });
+      if (!resp.ok) continue;
+      const rows = (await resp.json()) as Array<{
+        document?: { name?: string; fields?: Record<string, { stringValue?: string }> };
+      }>;
+      for (const row of rows) {
+        const f = row.document?.fields;
+        if (!f) continue;
+        const st = f.status?.stringValue || '';
+        const ordId = f.orderId?.stringValue || '';
+        const licKey = f.licenseKey?.stringValue || '';
+        const sameTarget =
+          (Boolean(currentOrderId) && ordId === currentOrderId) ||
+          (Boolean(currentLicenseKey) && licKey === currentLicenseKey);
+        if (st === 'verified' && !sameTarget) {
+          return true;
+        }
+      }
+    } catch {
+      // Ignore transient query failure
+    }
+  }
+  return false;
+}
+
+async function markSmsMatchedInFirestore(
+  receipt: StoredSmsReceipt,
+  orderId: string,
+  licenseKey: string
+): Promise<boolean> {
+  const token = await getFirebaseAdminAccessToken();
+  if (!token) return false;
+  const cfg = getFirebasePublicConfig();
+  if (!cfg.projectId) return false;
+
+  const baseUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+    cfg.projectId
+  )}/databases/${encodeURIComponent(cfg.databaseId)}/documents`;
+  const safeDocId = receipt.trxId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const nowIso = new Date().toISOString();
+
+  try {
+    const resp = await fetch(
+      `${baseUrl}/smsTransactions/${encodeURIComponent(
+        safeDocId
+      )}?updateMask.fieldPaths=status&updateMask.fieldPaths=matchedOrderId&updateMask.fieldPaths=matchedLicenseKey&updateMask.fieldPaths=updatedAt`,
+      {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          fields: {
+            status: { stringValue: 'matched' },
+            matchedOrderId: { stringValue: orderId || '' },
+            matchedLicenseKey: { stringValue: licenseKey || '' },
+            updatedAt: { timestampValue: nowIso },
+          },
+        }),
+        signal: AbortSignal.timeout(3500),
+      }
+    );
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      lastFirestoreSyncError = `Firestore smsTransactions match failed (${resp.status}): ${errText.slice(0, 140)}`;
+      return false;
+    }
+    lastFirestoreSyncError = null;
+    return true;
+  } catch (err) {
+    lastFirestoreSyncError = err instanceof Error ? err.message : 'Firestore match update error';
+    return false;
   }
 }
 
@@ -661,101 +1015,26 @@ async function persistSmsAndVerifyViaServiceAccount(
   )}/databases/${encodeURIComponent(cfg.databaseId)}/documents`;
 
   const nowIso = new Date().toISOString();
+  const safeDocId = receipt.trxId.replace(/[^a-zA-Z0-9_-]/g, '_');
 
-  // Check if any license already uses this trxId via structuredQuery
+  // Preserve any existing Firestore record (never reset an already matched/ignored receipt!)
+  const existingFs = await fetchSmsTransactionFromFirestore(receipt.trxId);
+  if (existingFs) {
+    receipt.status = existingFs.status;
+    receipt.matchedOrderId = existingFs.matchedOrderId;
+    receipt.matchedLicenseKey = existingFs.matchedLicenseKey;
+    receipt.syncedToFirestore = true;
+    lastFirestoreSyncError = null;
+    return;
+  }
+
   let matchedLicenseKey = receipt.matchedLicenseKey || '';
   let matchedOrderId = receipt.matchedOrderId || '';
   let smsStatus: 'unused' | 'matched' = receipt.status === 'matched' ? 'matched' : 'unused';
 
   try {
-    const queryRes = await fetch(`${baseUrl}:runQuery`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        structuredQuery: {
-          from: [{ collectionId: 'licenses' }],
-          where: {
-            fieldFilter: {
-              field: { fieldPath: 'trxId' },
-              op: 'EQUAL',
-              value: { stringValue: receipt.trxId },
-            },
-          },
-          limit: 5,
-        },
-      }),
-      signal: AbortSignal.timeout(3500),
-    });
-
-    if (queryRes.ok) {
-      const rows = (await queryRes.json()) as Array<{
-        document?: {
-          name?: string;
-          fields?: Record<
-            string,
-            { stringValue?: string; integerValue?: string; doubleValue?: number }
-          >;
-        };
-      }>;
-      for (const row of rows) {
-        const docFields = row.document?.fields;
-        if (!docFields) continue;
-        const licAmount = Number(docFields.amount?.doubleValue ?? docFields.amount?.integerValue ?? 0);
-        const licStatus = docFields.status?.stringValue || '';
-        const licKey = docFields.licenseKey?.stringValue || row.document?.name?.split('/').pop() || '';
-        const ordId = docFields.orderId?.stringValue || '';
-        if (licKey && receipt.amount >= licAmount && (licStatus === 'provisional' || licStatus === 'payment_required')) {
-          // Promote license and order to verified
-          await fetch(
-            `${baseUrl}/licenses/${encodeURIComponent(licKey)}?updateMask.fieldPaths=status&updateMask.fieldPaths=updatedAt`,
-            {
-              method: 'PATCH',
-              headers: {
-                Authorization: `Bearer ${token}`,
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                fields: {
-                  status: { stringValue: 'verified' },
-                  updatedAt: { timestampValue: nowIso },
-                },
-              }),
-            }
-          ).catch(() => {});
-
-          if (ordId) {
-            await fetch(
-              `${baseUrl}/orders/${encodeURIComponent(ordId)}?updateMask.fieldPaths=status&updateMask.fieldPaths=updatedAt`,
-              {
-                method: 'PATCH',
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                  fields: {
-                    status: { stringValue: 'verified' },
-                    updatedAt: { timestampValue: nowIso },
-                  },
-                }),
-              }
-            ).catch(() => {});
-          }
-
-          matchedLicenseKey = licKey;
-          matchedOrderId = ordId;
-          smsStatus = 'matched';
-          break;
-        }
-      }
-    }
-
-    // Upsert smsTransactions/{trxId}
-    const safeDocId = receipt.trxId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    await fetch(`${baseUrl}/smsTransactions/${encodeURIComponent(safeDocId)}`, {
+    // 1. Immediately save the incoming SMS receipt to Firestore BEFORE any matching so it survives Render restarts
+    const upsertRes = await fetch(`${baseUrl}/smsTransactions/${encodeURIComponent(safeDocId)}`, {
       method: 'PATCH',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -777,15 +1056,128 @@ async function persistSmsAndVerifyViaServiceAccount(
           updatedAt: { timestampValue: nowIso },
         },
       }),
-      signal: AbortSignal.timeout(3500),
+      signal: AbortSignal.timeout(4000),
     });
+
+    if (!upsertRes.ok) {
+      const errText = await upsertRes.text().catch(() => '');
+      lastFirestoreSyncError = `Firestore SMS write failed (${upsertRes.status}): ${errText.slice(0, 140)}`;
+      receipt.syncedToFirestore = false;
+      return;
+    }
+
+    lastFirestoreSyncError = null;
+    receipt.syncedToFirestore = true;
+
+    // 2. Look for awaiting licenses (by primary trxId OR resubmittedTrxId)
+    const candidateRows: Array<{
+      name?: string;
+      fields?: Record<string, { stringValue?: string; integerValue?: string; doubleValue?: number }>;
+    }> = [];
+
+    for (const fieldPath of ['trxId', 'resubmittedTrxId']) {
+      const queryRes = await fetch(`${baseUrl}:runQuery`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          structuredQuery: {
+            from: [{ collectionId: 'licenses' }],
+            where: {
+              fieldFilter: {
+                field: { fieldPath },
+                op: 'EQUAL',
+                value: { stringValue: receipt.trxId },
+              },
+            },
+            limit: 5,
+          },
+        }),
+        signal: AbortSignal.timeout(3500),
+      });
+
+      if (queryRes.ok) {
+        const rows = (await queryRes.json()) as Array<{
+          document?: {
+            name?: string;
+            fields?: Record<
+              string,
+              { stringValue?: string; integerValue?: string; doubleValue?: number }
+            >;
+          };
+        }>;
+        for (const r of rows) {
+          if (r.document) candidateRows.push(r.document);
+        }
+      }
+    }
+
+    for (const docItem of candidateRows) {
+      const docFields = docItem.fields;
+      if (!docFields) continue;
+
+      const licAmount = Number(docFields.amount?.doubleValue ?? docFields.amount?.integerValue ?? 0);
+      const licStatus = docFields.status?.stringValue || '';
+      const licKey = docFields.licenseKey?.stringValue || docItem.name?.split('/').pop() || '';
+      const ordId = docFields.orderId?.stringValue || '';
+
+      if (!licKey || (licStatus !== 'provisional' && licStatus !== 'payment_required')) {
+        continue;
+      }
+
+      const alreadyUsedElsewhere = await isTrxIdAlreadyVerifiedElsewhere(
+        receipt.trxId,
+        ordId,
+        licKey
+      );
+      if (alreadyUsedElsewhere) {
+        break;
+      }
+
+      const isResubmitted =
+        (docFields.resubmittedTrxId?.stringValue || '').toUpperCase().trim() === receipt.trxId;
+      let expectedProvider = isResubmitted
+        ? docFields.resubmittedPaymentMethod?.stringValue || docFields.paymentMethod?.stringValue
+        : docFields.paymentMethod?.stringValue;
+      let expectedPhone = isResubmitted
+        ? docFields.resubmittedPhone?.stringValue || docFields.senderPhone?.stringValue
+        : docFields.senderPhone?.stringValue;
+
+      if ((!expectedProvider || !expectedPhone) && ordId) {
+        const orderMeta = await fetchOrderPaymentMeta(ordId);
+        if (orderMeta) {
+          if (!expectedProvider) expectedProvider = orderMeta.paymentMethod;
+          if (!expectedPhone) expectedPhone = orderMeta.senderPhone;
+        }
+      }
+
+      const check = evaluateSmsMatch({
+        receipt,
+        expectedProvider,
+        expectedPhone,
+        expectedAmount: licAmount,
+        targetOrderId: ordId,
+        targetLicenseKey: licKey,
+      });
+
+      if (check.ok) {
+        await promoteLicenseViaServiceAccount(licKey, ordId);
+        await markSmsMatchedInFirestore(receipt, ordId, licKey);
+
+        matchedLicenseKey = licKey;
+        matchedOrderId = ordId;
+        smsStatus = 'matched';
+        break;
+      }
+    }
 
     receipt.matchedLicenseKey = matchedLicenseKey || undefined;
     receipt.matchedOrderId = matchedOrderId || undefined;
     receipt.status = smsStatus;
-    receipt.syncedToFirestore = true;
-  } catch {
-    // Non-fatal: remains buffered in server state for Admin sync
+  } catch (err) {
+    lastFirestoreSyncError = err instanceof Error ? err.message : 'Firestore SMS persistence failed';
   }
 }
 
@@ -892,6 +1284,7 @@ async function startServer() {
     res.json({
       webhookSecretConfigured: Boolean(process.env.SMS_WEBHOOK_SECRET?.trim()),
       firebaseAdminConfigured: Boolean(parseServiceAccountCreds()),
+      lastFirestoreSyncError,
       bufferedReceiptsCount: Object.keys(state.receipts).length,
       unsyncedCount,
     });
@@ -936,37 +1329,59 @@ async function startServer() {
         return res.status(400).json({ error: 'Invalid SMS transaction payload' });
       }
 
-      const state = loadSmsState();
-      const existingReceipt = state.receipts[trxId];
-      if (existingReceipt) {
+      return withTrxLock(trxId, async () => {
+        const state = loadSmsState();
+        const existingReceipt = state.receipts[trxId];
+        if (existingReceipt) {
+          if (!existingReceipt.syncedToFirestore) {
+            await persistSmsAndVerifyViaServiceAccount(existingReceipt);
+            saveSmsState(state);
+          }
+          return res.status(200).json({
+            ok: true,
+            duplicate: true,
+            trxId,
+            status: existingReceipt.status,
+            savedToFirebase: Boolean(existingReceipt.syncedToFirestore),
+          });
+        }
+
+        // Also check Firestore directly in case Render restarted and cleared /tmp
+        const existingFs = await fetchSmsTransactionFromFirestore(trxId);
+        if (existingFs) {
+          state.receipts[trxId] = existingFs;
+          saveSmsState(state);
+          return res.status(200).json({
+            ok: true,
+            duplicate: true,
+            trxId,
+            status: existingFs.status,
+            savedToFirebase: true,
+          });
+        }
+
+        const receipt: StoredSmsReceipt = {
+          trxId,
+          provider,
+          sender: String(req.body?.sender || provider).slice(0, 40),
+          amount,
+          senderPhone: String(req.body?.senderPhone || '').trim().slice(0, 40),
+          rawMessage: String(req.body?.rawMessage || '').slice(0, 1000),
+          receivedAtMs: Number(req.body?.receivedAt) || Date.now(),
+          status: 'unused',
+          syncedToFirestore: false,
+        };
+
+        await persistSmsAndVerifyViaServiceAccount(receipt);
+        state.receipts[trxId] = receipt;
+        saveSmsState(state);
+
         return res.status(200).json({
           ok: true,
-          duplicate: true,
-          trxId,
-          status: existingReceipt.status,
+          trxId: receipt.trxId,
+          status: receipt.status,
+          savedToFirebase: Boolean(receipt.syncedToFirestore),
         });
-      }
-
-      const receipt: StoredSmsReceipt = {
-        trxId,
-        provider,
-        sender: String(req.body?.sender || provider).slice(0, 40),
-        amount,
-        senderPhone: String(req.body?.senderPhone || '').trim().slice(0, 40),
-        rawMessage: String(req.body?.rawMessage || '').slice(0, 1000),
-        receivedAtMs: Number(req.body?.receivedAt) || Date.now(),
-        status: 'unused',
-        syncedToFirestore: false,
-      };
-
-      state.receipts[trxId] = receipt;
-      await persistSmsAndVerifyViaServiceAccount(receipt);
-      saveSmsState(state);
-
-      return res.status(200).json({
-        ok: true,
-        trxId: receipt.trxId,
-        status: receipt.status,
       });
     }
   );
@@ -1001,7 +1416,7 @@ async function startServer() {
     }
   );
 
-  // Public instant check: matches a submitted TrxID against server-buffered bKash/Nagad SMS receipts
+  // Public instant check: matches a submitted TrxID against Firebase & server-buffered bKash/Nagad SMS receipts
   app.post(
     '/api/payments/match-trx',
     publicApiLimiter,
@@ -1014,52 +1429,105 @@ async function startServer() {
       const licenseKey = String(req.body?.licenseKey || '').trim().toUpperCase();
       const orderId = String(req.body?.orderId || '').trim();
       const expectedAmount = Number(req.body?.amount ?? 0);
+      let expectedProvider = String(req.body?.paymentMethod || '').trim().toLowerCase();
+      let expectedPhone = String(req.body?.senderPhone || '').trim();
 
       if (!trxId) {
         return res.json({ matched: false });
       }
 
-      const state = loadSmsState();
-      const receipt = state.receipts[trxId];
-      if (!receipt) {
-        return res.json({ matched: false });
-      }
+      return withTrxLock(trxId, async () => {
+        // Guard: ensure this TrxID was never already verified on another order/license
+        const usedElsewhere = await isTrxIdAlreadyVerifiedElsewhere(trxId, orderId, licenseKey);
+        if (usedElsewhere) {
+          return res.json({ matched: false, reason: 'already_used' });
+        }
 
-      if (
-        receipt.status === 'matched' &&
-        receipt.matchedLicenseKey &&
-        licenseKey &&
-        receipt.matchedLicenseKey !== licenseKey
-      ) {
-        return res.json({ matched: false, reason: 'already_used' });
-      }
+        const state = loadSmsState();
+        // Prefer Firestore receipt if available (survives Render restarts & holds authoritative matched status)
+        const fsReceipt = await fetchSmsTransactionFromFirestore(trxId);
+        let receipt = fsReceipt || state.receipts[trxId];
 
-      if (receipt.amount + 0.01 < expectedAmount) {
-        return res.json({ matched: false, reason: 'insufficient_amount' });
-      }
+        if (fsReceipt) {
+          state.receipts[trxId] = fsReceipt;
+        }
 
-      receipt.status = 'matched';
-      if (orderId) receipt.matchedOrderId = orderId;
-      if (licenseKey) {
-        receipt.matchedLicenseKey = licenseKey;
-        state.verifiedKeys[licenseKey] = {
+        if (!receipt) {
+          return res.json({ matched: false });
+        }
+
+        // Fill missing provider/phone metadata from Firestore order/license if client omitted them
+        if ((!expectedProvider || !expectedPhone) && orderId) {
+          const orderMeta = await fetchOrderPaymentMeta(orderId);
+          if (orderMeta) {
+            if (!expectedProvider) expectedProvider = orderMeta.paymentMethod || '';
+            if (!expectedPhone) expectedPhone = orderMeta.senderPhone || '';
+          }
+        }
+        if ((!expectedProvider || !expectedPhone) && licenseKey) {
+          const lic = await fetchLicenseDoc(licenseKey);
+          if (lic) {
+            const isResub = lic.resubmittedTrxId === trxId;
+            if (!expectedProvider) {
+              expectedProvider = (isResub ? lic.resubmittedPaymentMethod : undefined) || lic.paymentMethod || '';
+            }
+            if (!expectedPhone) {
+              expectedPhone = (isResub ? lic.resubmittedPhone : undefined) || lic.senderPhone || '';
+            }
+          }
+        }
+
+        const check = evaluateSmsMatch({
+          receipt,
+          expectedProvider,
+          expectedPhone,
+          expectedAmount,
+          targetOrderId: orderId,
+          targetLicenseKey: licenseKey,
+        });
+
+        if (!check.ok) {
+          saveSmsState(state);
+          return res.json({
+            matched: false,
+            reason: check.reason,
+            paidAmount: receipt.amount,
+            expectedAmount,
+            receivedProvider: receipt.provider,
+            expectedProvider: expectedProvider || undefined,
+          });
+        }
+
+        receipt.status = 'matched';
+        if (orderId) receipt.matchedOrderId = orderId;
+        if (licenseKey) {
+          receipt.matchedLicenseKey = licenseKey;
+          state.verifiedKeys[licenseKey] = {
+            trxId,
+            amount: receipt.amount,
+            matchedAtMs: Date.now(),
+          };
+        }
+
+        const syncedMatch = await markSmsMatchedInFirestore(
+          receipt,
+          orderId || receipt.matchedOrderId || '',
+          licenseKey || receipt.matchedLicenseKey || ''
+        );
+        receipt.syncedToFirestore = syncedMatch;
+        state.receipts[trxId] = receipt;
+        saveSmsState(state);
+
+        if (licenseKey) {
+          await promoteLicenseViaServiceAccount(licenseKey, orderId);
+        }
+
+        return res.json({
+          matched: true,
           trxId,
           amount: receipt.amount,
-          matchedAtMs: Date.now(),
-        };
-      }
-      receipt.syncedToFirestore = false;
-      saveSmsState(state);
-
-      if (licenseKey) {
-        void promoteLicenseViaServiceAccount(licenseKey, orderId);
-      }
-
-      return res.json({
-        matched: true,
-        trxId,
-        amount: receipt.amount,
-        provider: receipt.provider,
+          provider: receipt.provider,
+        });
       });
     }
   );
@@ -1133,33 +1601,73 @@ async function startServer() {
       });
     }
 
-    // Check server-side SMS state in case SMS arrived or was matched before Admin synced Firestore
+    // Check Firebase & server-side SMS state in case SMS arrived or was matched before Admin synced Firestore
     const state = loadSmsState();
     let effectiveStatus = lic.status;
 
     if (effectiveStatus !== 'verified') {
-      if (state.verifiedKeys[rawKey]) {
+      if (effectiveStatus === 'provisional' && state.verifiedKeys[rawKey]) {
         effectiveStatus = 'verified';
       } else {
         const candidateTrx = (lic.resubmittedTrxId || lic.trxId || '').toUpperCase().trim();
-        const smsMatch = candidateTrx ? state.receipts[candidateTrx] : undefined;
-        if (
-          smsMatch &&
-          smsMatch.amount + 0.01 >= lic.amount &&
-          (!smsMatch.matchedLicenseKey || smsMatch.matchedLicenseKey === rawKey)
-        ) {
-          smsMatch.status = 'matched';
-          smsMatch.matchedLicenseKey = rawKey;
-          smsMatch.matchedOrderId = lic.orderId;
-          smsMatch.syncedToFirestore = false;
-          state.verifiedKeys[rawKey] = {
-            trxId: smsMatch.trxId,
-            amount: smsMatch.amount,
-            matchedAtMs: now,
-          };
-          saveSmsState(state);
-          effectiveStatus = 'verified';
-          void promoteLicenseViaServiceAccount(rawKey, lic.orderId);
+        if (candidateTrx) {
+          await withTrxLock(candidateTrx, async () => {
+            const fsSms = await fetchSmsTransactionFromFirestore(candidateTrx);
+            const smsMatch = fsSms || state.receipts[candidateTrx];
+            if (fsSms) {
+              state.receipts[candidateTrx] = fsSms;
+            }
+            if (!smsMatch) return;
+
+            const usedElsewhere = await isTrxIdAlreadyVerifiedElsewhere(
+              candidateTrx,
+              lic.orderId,
+              rawKey
+            );
+            if (usedElsewhere) return;
+
+            const isResub = Boolean(lic.resubmittedTrxId && lic.resubmittedTrxId === candidateTrx);
+            let expectedProvider: string | undefined = isResub
+              ? lic.resubmittedPaymentMethod || lic.paymentMethod
+              : lic.paymentMethod;
+            let expectedPhone: string | undefined = isResub
+              ? lic.resubmittedPhone || lic.senderPhone
+              : lic.senderPhone;
+
+            if ((!expectedProvider || !expectedPhone) && lic.orderId) {
+              const orderMeta = await fetchOrderPaymentMeta(lic.orderId);
+              if (orderMeta) {
+                if (!expectedProvider) expectedProvider = orderMeta.paymentMethod;
+                if (!expectedPhone) expectedPhone = orderMeta.senderPhone;
+              }
+            }
+
+            const check = evaluateSmsMatch({
+              receipt: smsMatch,
+              expectedProvider,
+              expectedPhone,
+              expectedAmount: lic.amount,
+              targetOrderId: lic.orderId,
+              targetLicenseKey: rawKey,
+            });
+
+            if (check.ok) {
+              smsMatch.status = 'matched';
+              smsMatch.matchedLicenseKey = rawKey;
+              smsMatch.matchedOrderId = lic.orderId;
+              const syncedMatch = await markSmsMatchedInFirestore(smsMatch, lic.orderId, rawKey);
+              smsMatch.syncedToFirestore = syncedMatch;
+              state.receipts[candidateTrx] = smsMatch;
+              state.verifiedKeys[rawKey] = {
+                trxId: smsMatch.trxId,
+                amount: smsMatch.amount,
+                matchedAtMs: now,
+              };
+              saveSmsState(state);
+              effectiveStatus = 'verified';
+              await promoteLicenseViaServiceAccount(rawKey, lic.orderId);
+            }
+          });
         }
       }
     }

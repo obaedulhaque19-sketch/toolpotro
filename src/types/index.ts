@@ -114,6 +114,8 @@ export interface LicenseRecord {
   durationDays?: number;
   currency: CurrencyCode;
   amount: number;
+  paymentMethod?: PaymentMethod;
+  senderPhone?: string;
   trxId: string;
   status: LicenseStatus;
   graceUntilMs: number;
@@ -122,6 +124,7 @@ export interface LicenseRecord {
   boundDevices: string[];
   resubmittedTrxId?: string;
   resubmittedPhone?: string;
+  resubmittedPaymentMethod?: PaymentMethod;
   resubmittedAtMs?: number;
   createdAt?: Timestamp | Date | string;
   updatedAt?: Timestamp | Date | string;
