@@ -39,6 +39,7 @@ import {
 } from 'lucide-react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useApp } from '../context/AppContext';
+import { PaymentBrandLogo, SendMoneyInstruction } from '../components/PaymentBrandLogo';
 import type {
   CouponCode,
   PaymentDisplaySettings,
@@ -58,7 +59,7 @@ export function SoftwareDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { t } = useApp();
+  const { t, language } = useApp();
 
   const [item, setItem] = useState<SoftwareItem | null>(null);
   const [relatedItems, setRelatedItems] = useState<SoftwareItem[]>([]);
@@ -87,7 +88,7 @@ export function SoftwareDetailPage() {
   });
   const [selectedPlanId, setSelectedPlanId] = useState<string>('');
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('bkash');
+  const [paymentMethod, setPaymentMethod] = useState<'bkash' | 'nagad'>('bkash');
   const [customerName, setCustomerName] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
   const [senderPhone, setSenderPhone] = useState('');
@@ -1329,28 +1330,40 @@ export function SoftwareDetailPage() {
                       <button
                         type="button"
                         onClick={() => setPaymentMethod('bkash')}
-                        className={`h-10 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                        aria-label="bKash (Personal)"
+                        aria-pressed={paymentMethod === 'bkash'}
+                        className={`relative h-12 rounded-xl border-2 px-3 flex items-center justify-center transition-all cursor-pointer ${
                           paymentMethod === 'bkash'
-                            ? 'border-pink-600 bg-pink-600/15 text-pink-700 dark:text-pink-300 ring-1 ring-pink-500/40'
-                            : 'border-teal-900/15 dark:border-teal-500/20 bg-white dark:bg-[#051114] text-[#1e4347] dark:text-slate-300'
+                            ? 'border-[#E2136E] bg-pink-50/90 dark:bg-white shadow-xs ring-2 ring-pink-500/25'
+                            : 'border-teal-900/15 dark:border-white/20 bg-white dark:bg-white/95 hover:border-pink-300'
                         }`}
                       >
-                        <span className="w-2 h-2 rounded-full bg-pink-500" />
-                        bKash (Personal)
+                        <PaymentBrandLogo method="bkash" variant="selector" />
+                        {paymentMethod === 'bkash' && (
+                          <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-[#E2136E] text-white flex items-center justify-center">
+                            <Check className="w-2.5 h-2.5 stroke-[3]" />
+                          </span>
+                        )}
                       </button>
                     )}
                     {paymentSettings.nagadEnabled && (
                       <button
                         type="button"
                         onClick={() => setPaymentMethod('nagad')}
-                        className={`h-10 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                        aria-label="Nagad (Personal)"
+                        aria-pressed={paymentMethod === 'nagad'}
+                        className={`relative h-12 rounded-xl border-2 px-3 flex items-center justify-center transition-all cursor-pointer ${
                           paymentMethod === 'nagad'
-                            ? 'border-orange-600 bg-orange-600/15 text-orange-700 dark:text-orange-300 ring-1 ring-orange-500/40'
-                            : 'border-teal-900/15 dark:border-teal-500/20 bg-white dark:bg-[#051114] text-[#1e4347] dark:text-slate-300'
+                            ? 'border-[#F25C19] bg-orange-50/90 dark:bg-white shadow-xs ring-2 ring-orange-500/25'
+                            : 'border-teal-900/15 dark:border-white/20 bg-white dark:bg-white/95 hover:border-orange-300'
                         }`}
                       >
-                        <span className="w-2 h-2 rounded-full bg-orange-500" />
-                        Nagad (Personal)
+                        <PaymentBrandLogo method="nagad" variant="selector" />
+                        {paymentMethod === 'nagad' && (
+                          <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-[#F25C19] text-white flex items-center justify-center">
+                            <Check className="w-2.5 h-2.5 stroke-[3]" />
+                          </span>
+                        )}
                       </button>
                     )}
                   </div>
@@ -1363,8 +1376,12 @@ export function SoftwareDetailPage() {
                         : paymentSettings.nagadNumber;
                     return (
                       <div className="rounded-xl border border-teal-900/15 dark:border-teal-500/20 bg-white dark:bg-[#051114] p-3 space-y-2">
-                        <p className="text-[11px] text-[#2c595d] dark:text-teal-200/75">
-                          {t.details.sendMoneyInstruction}
+                        <p className="text-[11px] text-[#2c595d] dark:text-teal-200/75 leading-relaxed">
+                          <SendMoneyInstruction
+                            language={language}
+                            method={paymentMethod}
+                            formattedAmount={`${currencySymbol}${finalPrice}`}
+                          />
                         </p>
                         {activeNumber ? (
                           <div className="flex items-center justify-between gap-2">
@@ -1464,13 +1481,18 @@ export function SoftwareDetailPage() {
                   </div>
                 )}
 
-                <button
-                  type="submit"
-                  disabled={checkoutSubmitting}
-                  className="w-full h-11 rounded-xl bg-[#0d9488] hover:bg-[#0f766e] text-white dark:bg-[#10d9a0] dark:hover:bg-[#0ec28f] dark:text-slate-950 font-bold text-sm transition-colors disabled:opacity-60 cursor-pointer"
-                >
-                  {checkoutSubmitting ? t.details.submittingCheckout : t.details.submitCheckout}
-                </button>
+                <div className="pt-0.5 flex flex-col items-center gap-2.5">
+                  <div className="inline-flex items-center justify-center dark:bg-white/95 dark:px-3 dark:py-1 dark:rounded-lg">
+                    <PaymentBrandLogo method={paymentMethod} variant="indicator" />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={checkoutSubmitting}
+                    className="w-full h-11 rounded-xl bg-[#0d9488] hover:bg-[#0f766e] text-white dark:bg-[#10d9a0] dark:hover:bg-[#0ec28f] dark:text-slate-950 font-bold text-sm transition-colors disabled:opacity-60 cursor-pointer"
+                  >
+                    {checkoutSubmitting ? t.details.submittingCheckout : t.details.submitCheckout}
+                  </button>
+                </div>
               </form>
             )}
           </div>

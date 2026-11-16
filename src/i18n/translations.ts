@@ -329,7 +329,8 @@ export const translations: Record<Language, Translations> = {
       statusExpired: 'Subscription Expired',
       statusRevoked: 'License Revoked',
       resubmitTitle: 'Submit / Update Payment TrxID',
-      resubmitSubtitle: 'If your previous TrxID had a typo or payment did not match, send the amount via bKash/Nagad and enter your valid TrxID below.',
+      resubmitSubtitle:
+        'If your previous TrxID/number had a typo or you selected the wrong method (bKash/Nagad), choose the correct method below and submit your sender number & TrxID to unlock.',
       resubmitBtn: 'Verify & Unlock License',
       resubmitSuccessMatched: 'Payment matched! Your license is now fully verified and unlocked.',
       resubmitSuccessPending: 'TrxID updated. Automated verification or Admin review will unlock it shortly.',
@@ -577,7 +578,8 @@ export const translations: Record<Language, Translations> = {
       statusExpired: 'মেয়াদ শেষ হয়েছে',
       statusRevoked: 'লাইসেন্স বাতিল করা হয়েছে',
       resubmitTitle: 'সঠিক TrxID সাবমিট / আপডেট করুন',
-      resubmitSubtitle: 'আগের TrxID-তে ভুল হয়ে থাকলে বিকাশ/নগদে পেমেন্ট করে সঠিক TrxID ও নাম্বার নিচে দিন।',
+      resubmitSubtitle:
+        'ভুল মাধ্যম (বিকাশ/নগদ), নাম্বার বা TrxID হয়ে থাকলে সঠিক মাধ্যম বেছে নিয়ে নাম্বার ও TrxID দিন—অথবা নতুন পেমেন্ট করে সাবমিট করলেই আনলক হয়ে যাবে।',
       resubmitBtn: 'যাচাই ও আনলক করুন',
       resubmitSuccessMatched: 'পেমেন্ট মিলে গেছে! আপনার লাইসেন্স সম্পূর্ণ ভেরিফায়েড ও আনলক হয়েছে।',
       resubmitSuccessPending: 'নতুন TrxID জমা হয়েছে। SMS ম্যাচ বা অ্যাডমিন যাচাইয়ের পর আনলক হয়ে যাবে।',
@@ -825,7 +827,8 @@ export const translations: Record<Language, Translations> = {
       statusExpired: 'सदस्यता समाप्त हो गई',
       statusRevoked: 'लाइसेंस रद्द किया गया',
       resubmitTitle: 'मान्य TrxID अपडेट / सबमिट करें',
-      resubmitSubtitle: 'यदि पिछला TrxID गलत था, तो bKash/Nagad से भुगतान करके नीचे सही TrxID दर्ज करें।',
+      resubmitSubtitle:
+        'यदि पिछला माध्यम (bKash/Nagad), नंबर या TrxID गलत था, तो सही माध्यम चुनकर नंबर और TrxID सबमिट करें—या भुगतान करके अनलॉक करें।',
       resubmitBtn: 'सत्यापित और अनलॉक करें',
       resubmitSuccessMatched: 'भुगतान मिल गया! आपका लाइसेंस सत्यापित और अनलॉक हो गया है।',
       resubmitSuccessPending: 'TrxID अपडेट हो गया। SMS मिलान या एडमिन समीक्षा के बाद अनलॉक हो जाएगा।',
